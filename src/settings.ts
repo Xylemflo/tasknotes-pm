@@ -29,10 +29,10 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Tasknotes-PM" });
-    containerEl.createEl("p", {
-      text: "Dates only move later. Calculated timestamps preserve hour-level scheduling while TaskNotes displays a due date.",
-    });
+    new Setting(containerEl)
+      .setName("Tasknotes-PM")
+      .setHeading()
+      .setDesc("Dates only move later. Calculated timestamps preserve hour-level scheduling while TaskNotes displays a due date.");
 
     this.addTextSetting(containerEl, "Duration property", "Frontmatter property measured in hours.", "durationProperty");
     this.addTextSetting(containerEl, "Completion timestamp property", "Plugin-owned ISO timestamp used to retain hour-level precision.", "completionProperty");
