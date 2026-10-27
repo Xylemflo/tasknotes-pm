@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+.obsidian/
+dist/
+build/
+.DS_Store
+
+# Local vault-specific test evidence; never publish user task data.
+Qverse_Sync-copy-test-log.md

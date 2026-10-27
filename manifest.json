@@ -1,0 +1,9 @@
+{
+  "id": "tasknotes-pm",
+  "name": "Tasknotes-PM",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.2",
+  "description": "Project scheduling and project-card styling for TaskNotes.",
+  "author": "Xylemflo",
+  "isDesktopOnly": false
+}

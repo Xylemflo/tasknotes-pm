@@ -1,0 +1,27 @@
+{
+  "name": "tasknotes-pm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Project scheduling companion plugin for TaskNotes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xylemflo/tasknotes-pm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Xylemflo/tasknotes-pm/issues"
+  },
+  "homepage": "https://github.com/Xylemflo/tasknotes-pm#readme",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "check": "tsc --noEmit",
+    "release:check": "pnpm check && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "obsidian": "^1.12.2",
+    "typescript": "^5.7.2"
+  }
+}

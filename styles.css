@@ -1,0 +1,15 @@
+.task-card.tasknotes-pm-project-card {
+  background: #35105f !important;
+  border-color: #6f3fb0 !important;
+  color: #fff !important;
+}
+
+.task-card.tasknotes-pm-project-card :is(a, button, .task-card__title, .task-card__metadata) {
+  color: inherit;
+}
+
+.task-card.tasknotes-pm-project-card:focus-within,
+.task-card.tasknotes-pm-project-card:hover {
+  background: #47157c !important;
+  box-shadow: 0 0 0 1px #9b6bd1;
+}
