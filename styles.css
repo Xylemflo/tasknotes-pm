@@ -1,15 +1,20 @@
 .task-card.tasknotes-pm-project-card {
-  background: #35105f !important;
-  border-color: #6f3fb0 !important;
-  color: #fff !important;
-}
-
-.task-card.tasknotes-pm-project-card :is(a, button, .task-card__title, .task-card__metadata) {
-  color: inherit;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 92%) !important;
+  border-left: 3px solid hsl(var(--tasknotes-pm-project-hue), 50%, 55%) !important;
 }
 
 .task-card.tasknotes-pm-project-card:focus-within,
 .task-card.tasknotes-pm-project-card:hover {
-  background: #47157c !important;
-  box-shadow: 0 0 0 1px #9b6bd1;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 87%) !important;
+  box-shadow: 0 0 0 1px hsl(var(--tasknotes-pm-project-hue), 50%, 55%);
+}
+
+.theme-dark .task-card.tasknotes-pm-project-card {
+  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 18%) !important;
+  border-left-color: hsl(var(--tasknotes-pm-project-hue), 40%, 40%) !important;
+}
+
+.theme-dark .task-card.tasknotes-pm-project-card:focus-within,
+.theme-dark .task-card.tasknotes-pm-project-card:hover {
+  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 23%) !important;
 }

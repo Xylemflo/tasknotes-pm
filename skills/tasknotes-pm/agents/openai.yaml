@@ -1,0 +1,4 @@
+interface:
+  display_name: "TaskNotes Project Manager"
+  short_description: "Schedule and color TaskNotes project hierarchies"
+  default_prompt: "Use $tasknotes-pm to review and update the TaskNotes projects in my vault."

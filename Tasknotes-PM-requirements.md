@@ -107,8 +107,9 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
 
 ### 4.5 Kanban treatment
 
-1. In TaskNotes Kanban views, a card for any task that currently has direct subtasks must use a dark-purple background.
-2. A nested task uses dark purple only when it itself has subtasks; merely being a child of a project does not make it a project card.
+1. In TaskNotes Kanban views, a project task and each of its direct subtasks must use the same deterministic, project-specific HSL background color.
+2. The selected hue must be saved in plugin-owned task frontmatter so it is preserved when the vault syncs to another device. The rendering code must not depend on TaskNotes Project Colors.
+3. A nested project uses its own project color with its direct children; it does not inherit its outer project's color when acting as a parent.
 3. The styling must preserve readable foreground text, status controls, icons, keyboard focus, hover state, and the user’s light/dark theme contrast.
 4. Apply the style without changing a task’s status, tags, priority, or any TaskNotes data unrelated to this feature.
 5. The implementation may use a plugin-owned CSS class and a small, documented marker property only if TaskNotes’ Bases/Kanban renderer cannot reliably expose the project state. The marker must be maintained by the updater and be opt-out/configurable.
@@ -144,7 +145,7 @@ Changing defaults affects subsequent calculations; it does not rewrite every tas
 4. A task without a `duration` receives the default scheduling value of 24 hours without overwriting a valid explicit value.
 5. The command produces the same result as the start-up update and is safe to run repeatedly.
 6. Existing unrelated TaskNotes dependencies survive an update unchanged.
-7. A project task’s Kanban card is dark purple; an ordinary task’s card is not.
+7. A project task and its direct child cards share their project-specific color, while an unrelated task has no project-color treatment.
 8. Cycles and unresolved links do not cause partial corrupt dependency rewrites or a loop.
 
 ## 8. Critical concerns and decisions required before build
@@ -180,7 +181,7 @@ TaskNotes preserves relationship types and gaps, but its current built-in blocki
 
 ### F. Kanban implementation risk
 
-TaskNotes v4 Kanban is rendered through Obsidian Bases. Whether a third-party plugin can safely apply a per-card class must be confirmed against the installed TaskNotes and Obsidian versions. The fallback is a plugin-managed `isProject: true` property with a documented Bases/CSS rule. This is visually reliable, but adds a visible custom field unless hidden in the user’s view configuration.
+TaskNotes v4 Kanban is rendered through Obsidian Bases. Whether a third-party plugin can safely apply a per-card class must be confirmed against the installed TaskNotes and Obsidian versions. The fallback is a plugin-managed `tasknotesPmProjectColor` property with a documented Bases/CSS rule. This is visually reliable and persists through sync, but adds a visible custom field unless hidden in the user’s view configuration.
 
 ### G. Start-up writes and vault synchronization
 
