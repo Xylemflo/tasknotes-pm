@@ -1,20 +1,20 @@
 .task-card.tasknotes-pm-project-card {
-  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 92%) !important;
-  border-left: 3px solid hsl(var(--tasknotes-pm-project-hue), 50%, 55%) !important;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 92%);
+  border-left: 3px solid hsl(var(--tasknotes-pm-project-hue), 50%, 55%);
 }
 
 .task-card.tasknotes-pm-project-card:focus-within,
 .task-card.tasknotes-pm-project-card:hover {
-  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 87%) !important;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 55%, 87%);
   box-shadow: 0 0 0 1px hsl(var(--tasknotes-pm-project-hue), 50%, 55%);
 }
 
 .theme-dark .task-card.tasknotes-pm-project-card {
-  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 18%) !important;
-  border-left-color: hsl(var(--tasknotes-pm-project-hue), 40%, 40%) !important;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 18%);
+  border-left-color: hsl(var(--tasknotes-pm-project-hue), 40%, 40%);
 }
 
 .theme-dark .task-card.tasknotes-pm-project-card:focus-within,
 .theme-dark .task-card.tasknotes-pm-project-card:hover {
-  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 23%) !important;
+  background-color: hsl(var(--tasknotes-pm-project-hue), 30%, 23%);
 }

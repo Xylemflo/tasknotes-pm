@@ -39,7 +39,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     new Setting(containerEl)
-      .setName("Tasknotes-PM")
+      .setName("Project scheduling")
       .setHeading()
       .setDesc("Dates only move later. Calculated timestamps preserve hour-level scheduling while TaskNotes displays a due date.");
 

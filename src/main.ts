@@ -80,11 +80,52 @@ export default class TasknotesPmPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+    this.settings = { ...DEFAULT_SETTINGS, ...this.validSettings(await this.loadData() as unknown) };
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  private validSettings(value: unknown): Partial<TasknotesPmSettings> {
+    if (!this.isRecord(value)) return {};
+    const positiveNumber = (key: keyof TasknotesPmSettings): number | undefined => {
+      const candidate = value[key];
+      return typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0 ? candidate : undefined;
+    };
+    const boolean = (key: keyof TasknotesPmSettings): boolean | undefined =>
+      typeof value[key] === "boolean" ? value[key] : undefined;
+    const text = (key: keyof TasknotesPmSettings): string | undefined =>
+      typeof value[key] === "string" && value[key].trim() ? value[key].trim() : undefined;
+
+    const settings: Partial<TasknotesPmSettings> = {};
+    const durationProperty = text("durationProperty");
+    const completionProperty = text("completionProperty");
+    const projectColorProperty = text("projectColorProperty");
+    const projectColorSchemeVersion = positiveNumber("projectColorSchemeVersion");
+    const defaultDurationHours = positiveNumber("defaultDurationHours");
+    const dependencyGapHours = positiveNumber("dependencyGapHours");
+    const projectBufferHours = positiveNumber("projectBufferHours");
+    const updateOnStartup = boolean("updateOnStartup");
+    const syncGoogleCalendarOnStartup = boolean("syncGoogleCalendarOnStartup");
+    const syncGoogleCalendarOnUpdate = boolean("syncGoogleCalendarOnUpdate");
+    const highlightProjectCards = boolean("highlightProjectCards");
+    if (durationProperty !== undefined) settings.durationProperty = durationProperty;
+    if (completionProperty !== undefined) settings.completionProperty = completionProperty;
+    if (projectColorProperty !== undefined) settings.projectColorProperty = projectColorProperty;
+    if (projectColorSchemeVersion !== undefined) settings.projectColorSchemeVersion = projectColorSchemeVersion;
+    if (defaultDurationHours !== undefined) settings.defaultDurationHours = defaultDurationHours;
+    if (dependencyGapHours !== undefined) settings.dependencyGapHours = dependencyGapHours;
+    if (projectBufferHours !== undefined) settings.projectBufferHours = projectBufferHours;
+    if (updateOnStartup !== undefined) settings.updateOnStartup = updateOnStartup;
+    if (syncGoogleCalendarOnStartup !== undefined) settings.syncGoogleCalendarOnStartup = syncGoogleCalendarOnStartup;
+    if (syncGoogleCalendarOnUpdate !== undefined) settings.syncGoogleCalendarOnUpdate = syncGoogleCalendarOnUpdate;
+    if (highlightProjectCards !== undefined) settings.highlightProjectCards = highlightProjectCards;
+    return settings;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   async updateProjectDates(startup: boolean): Promise<void> {
@@ -331,8 +372,9 @@ export default class TasknotesPmPlugin extends Plugin {
       if (!durationMissing) continue;
 
       try {
-        await this.app.fileManager.processFrontMatter(this.fileFor(path), (fm) => {
-          if (durationMissing) fm[this.settings.durationProperty] = this.settings.defaultDurationHours;
+        await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          if (durationMissing) metadata[this.settings.durationProperty] = this.settings.defaultDurationHours;
         });
         if (durationMissing) summary.defaultsAdded++;
       } catch (error) {
@@ -387,7 +429,8 @@ export default class TasknotesPmPlugin extends Plugin {
       if (currentHue === hue) continue;
       try {
         await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
-          frontmatter[this.settings.projectColorProperty] = hue;
+          const metadata = frontmatter as Record<string, unknown>;
+          metadata[this.settings.projectColorProperty] = hue;
         });
         summary.colorsAssigned++;
       } catch (error) {
@@ -496,8 +539,9 @@ export default class TasknotesPmPlugin extends Plugin {
 
       try {
         await api.tasks.setDue(path, this.formatDueDate(completionMs), context);
-        await this.app.fileManager.processFrontMatter(this.fileFor(path), (fm) => {
-          fm[this.settings.completionProperty] = new Date(completionMs).toISOString();
+        await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          metadata[this.settings.completionProperty] = new Date(completionMs).toISOString();
         });
         summary.datesChanged++;
       } catch (error) {
@@ -646,7 +690,7 @@ export default class TasknotesPmPlugin extends Plugin {
       if (!this.settings.highlightProjectCards) return;
       for (const mutation of mutations) {
         mutation.addedNodes.forEach((node) => {
-          if (!(node instanceof HTMLElement)) return;
+          if (!node.instanceOf(HTMLElement)) return;
           if (node.matches(".task-card")) this.styleProjectCard(node);
           node.querySelectorAll?.<HTMLElement>(".task-card").forEach((card) => this.styleProjectCard(card));
         });
@@ -688,10 +732,7 @@ export default class TasknotesPmPlugin extends Plugin {
     // incorrectly colour an ordinary child task as a project.
     // TaskNotes may render "file" and "name" on separate lines in narrow cards.
     const fileName = card.textContent?.match(/file\s*name:\s*(.+?\.md)(?:\s|$)/i)?.[1];
-    if (fileName) {
-      const matches = this.app.vault.getFiles().filter((file) => file.name === fileName);
-      if (matches.length === 1) return matches[0].path;
-    }
+    if (fileName) return this.app.metadataCache.getFirstLinkpathDest(fileName, "")?.path ?? null;
 
     const link = card.querySelector<HTMLElement>("[data-href], a.internal-link");
     const href = link?.getAttribute("data-href") ?? link?.getAttribute("href");

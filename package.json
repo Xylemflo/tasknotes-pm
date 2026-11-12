@@ -1,6 +1,6 @@
 {
   "name": "tasknotes-pm",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Project scheduling companion plugin for TaskNotes.",
   "license": "MIT",
