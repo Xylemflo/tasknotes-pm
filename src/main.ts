@@ -724,7 +724,13 @@ export default class TasknotesPmPlugin extends Plugin {
   }
 
   private pathForCard(card: HTMLElement): string | null {
-    const direct = card.getAttribute("data-path") ?? card.getAttribute("data-file-path");
+    // TaskNotes v5 (the user-facing 15.0 update) uses data-task-path on its
+    // rendered task cards. Keep the older attributes as fallbacks so this
+    // remains compatible with earlier TaskNotes releases and third-party
+    // views that reuse TaskNotes card markup.
+    const direct = card.getAttribute("data-task-path")
+      ?? card.getAttribute("data-path")
+      ?? card.getAttribute("data-file-path");
     if (direct) return direct;
 
     // TaskNotes cards expose their own note name in card metadata. Prefer it to
