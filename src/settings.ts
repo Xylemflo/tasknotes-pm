@@ -4,12 +4,14 @@ import type TasknotesPmPlugin from "./main";
 export interface TasknotesPmSettings {
   durationProperty: string;
   completionProperty: string;
+  hardDeadlineProperty: string;
   projectColorProperty: string;
   /** Internal migration marker for the persisted distinct-project palette. */
   projectColorSchemeVersion: number;
   defaultDurationHours: number;
   dependencyGapHours: number;
   projectBufferHours: number;
+  hardDeadlineConflictPolicy: "ignore" | "move-deadline";
   updateOnStartup: boolean;
   syncGoogleCalendarOnStartup: boolean;
   syncGoogleCalendarOnUpdate: boolean;
@@ -19,11 +21,13 @@ export interface TasknotesPmSettings {
 export const DEFAULT_SETTINGS: TasknotesPmSettings = {
   durationProperty: "duration",
   completionProperty: "tasknotesPmCompletion",
+  hardDeadlineProperty: "hardDeadline",
   projectColorProperty: "tasknotesPmProjectColor",
   projectColorSchemeVersion: 0,
   defaultDurationHours: 24,
   dependencyGapHours: 24,
   projectBufferHours: 24,
+  hardDeadlineConflictPolicy: "ignore",
   updateOnStartup: true,
   syncGoogleCalendarOnStartup: true,
   syncGoogleCalendarOnUpdate: true,
@@ -41,18 +45,30 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Project scheduling")
       .setHeading()
-      .setDesc("Dates only move later. Calculated timestamps preserve hour-level scheduling while TaskNotes displays a due date.");
+      .setDesc("Ordinary dependencies extend dates; project rollups and hard deadlines are exact. Precise timestamps are retained while TaskNotes displays a date.");
 
     this.addTextSetting(containerEl, "Duration property", "Frontmatter property measured in hours.", "durationProperty");
     this.addTextSetting(containerEl, "Completion timestamp property", "Plugin-owned ISO timestamp used to retain hour-level precision.", "completionProperty");
+    this.addTextSetting(containerEl, "Hard deadline property", "A date in this frontmatter property schedules children backward from the parent deadline.", "hardDeadlineProperty");
     this.addTextSetting(containerEl, "Project color property", "A persisted HSL hue (0–359) shared by each project and its direct children.", "projectColorProperty");
     this.addNumberSetting(containerEl, "Default duration", "Hours used when no valid duration exists.", "defaultDurationHours");
     this.addNumberSetting(containerEl, "Dependency gap", "Hours between a predecessor finishing and a successor starting.", "dependencyGapHours");
-    this.addNumberSetting(containerEl, "Project buffer", "Hours after the latest subtask before a project completes.", "projectBufferHours");
+
+    new Setting(containerEl)
+      .setName("Hard deadline conflict")
+      .setDesc("Choose what happens when backward scheduling would begin before today.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("ignore", "Honor deadline and create overdue tasks")
+        .addOption("move-deadline", "Move parent due date and deadline")
+        .setValue(this.plugin.settings.hardDeadlineConflictPolicy)
+        .onChange(async (value) => {
+          this.plugin.settings.hardDeadlineConflictPolicy = value as TasknotesPmSettings["hardDeadlineConflictPolicy"];
+          await this.plugin.saveSettings();
+        }));
 
     new Setting(containerEl)
       .setName("Update project dates on startup")
-      .setDesc("Run one safe, extend-only project-date update after TaskNotes is ready.")
+      .setDesc("Run the same project rollup and deadline update after TaskNotes is ready.")
       .addToggle((toggle) => toggle.setValue(this.plugin.settings.updateOnStartup).onChange(async (value) => {
         this.plugin.settings.updateOnStartup = value;
         await this.plugin.saveSettings();
@@ -84,7 +100,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
       }));
   }
 
-  private addTextSetting(containerEl: HTMLElement, name: string, desc: string, key: "durationProperty" | "completionProperty" | "projectColorProperty"): void {
+  private addTextSetting(containerEl: HTMLElement, name: string, desc: string, key: "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty"): void {
     new Setting(containerEl).setName(name).setDesc(desc).addText((text) => text
       .setValue(this.plugin.settings[key])
       .onChange(async (value) => {
@@ -95,7 +111,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
       }));
   }
 
-  private addNumberSetting(containerEl: HTMLElement, name: string, desc: string, key: "defaultDurationHours" | "dependencyGapHours" | "projectBufferHours"): void {
+  private addNumberSetting(containerEl: HTMLElement, name: string, desc: string, key: "defaultDurationHours" | "dependencyGapHours"): void {
     new Setting(containerEl).setName(name).setDesc(desc).addText((text) => text
       .setPlaceholder("24")
       .setValue(String(this.plugin.settings[key]))

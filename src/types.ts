@@ -14,6 +14,23 @@ export type TaskInfo = {
   completed?: boolean;
 };
 
+export type GanttTask = {
+  path: string;
+  name: string;
+  startMs: number;
+  endMs: number;
+  hue: number;
+  isProject: boolean;
+  depth: number;
+};
+
+export type GanttProject = {
+  path: string;
+  name: string;
+  hue: number;
+  tasks: GanttTask[];
+};
+
 export type TaskDependency = {
   uid: string;
   reltype?: "FINISHTOSTART" | "FINISHTOFINISH" | "STARTTOSTART" | "STARTTOFINISH";

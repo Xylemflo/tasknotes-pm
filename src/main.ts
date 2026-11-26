@@ -1,15 +1,23 @@
 import { Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { GANTT_VIEW_TYPE, TasknotesPmGanttView } from "./gantt-view";
 import { DEFAULT_SETTINGS, TasknotesPmSettingTab, type TasknotesPmSettings } from "./settings";
-import type { MutationContext, ResolvedDependency, TaskInfo, TaskNotesApi, TaskNotesPlugin } from "./types";
+import type { GanttProject, GanttTask, MutationContext, ResolvedDependency, TaskInfo, TaskNotesApi, TaskNotesPlugin } from "./types";
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const PLUGIN_SOURCE = "tasknotes-pm";
 const DISTINCT_COLOR_SCHEME_VERSION = 1;
 
 type TaskState = {
   durationHours: number;
   completionMs: number | null;
+  hardDeadlineMs: number | null;
   isCompletedOrArchived: boolean;
+};
+
+type DeadlineSchedule = {
+  forcedCompletions: Map<string, number>;
+  parentDeadlines: Map<string, number>;
 };
 
 type RunSummary = {
@@ -19,6 +27,9 @@ type RunSummary = {
   datesChanged: number;
   defaultsAdded: number;
   colorsAssigned: number;
+  parentDurationsChanged: number;
+  deadlineWarnings: string[];
+  deadlinesMoved: number;
   calendarSync: CalendarSyncStatus;
   invalidDurations: string[];
   unscheduled: string[];
@@ -64,6 +75,12 @@ export default class TasknotesPmPlugin extends Plugin {
       name: "Sync Open Tasks to Google Calendar",
       callback: () => void this.syncOpenTasksToGoogleCalendar(false, true),
     });
+    this.registerView(GANTT_VIEW_TYPE, (leaf) => new TasknotesPmGanttView(leaf, this));
+    this.addCommand({
+      id: "open-gantt-view",
+      name: "Open Gantt View",
+      callback: () => void this.openGanttView(),
+    });
 
     this.installKanbanObserver();
     this.app.workspace.onLayoutReady(() => {
@@ -77,6 +94,7 @@ export default class TasknotesPmPlugin extends Plugin {
 
   onunload(): void {
     this.cardObserver?.disconnect();
+    this.app.workspace.detachLeavesOfType(GANTT_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -101,6 +119,7 @@ export default class TasknotesPmPlugin extends Plugin {
     const settings: Partial<TasknotesPmSettings> = {};
     const durationProperty = text("durationProperty");
     const completionProperty = text("completionProperty");
+    const hardDeadlineProperty = text("hardDeadlineProperty");
     const projectColorProperty = text("projectColorProperty");
     const projectColorSchemeVersion = positiveNumber("projectColorSchemeVersion");
     const defaultDurationHours = positiveNumber("defaultDurationHours");
@@ -110,8 +129,12 @@ export default class TasknotesPmPlugin extends Plugin {
     const syncGoogleCalendarOnStartup = boolean("syncGoogleCalendarOnStartup");
     const syncGoogleCalendarOnUpdate = boolean("syncGoogleCalendarOnUpdate");
     const highlightProjectCards = boolean("highlightProjectCards");
+    const hardDeadlineConflictPolicy = value.hardDeadlineConflictPolicy === "ignore" || value.hardDeadlineConflictPolicy === "move-deadline"
+      ? value.hardDeadlineConflictPolicy
+      : undefined;
     if (durationProperty !== undefined) settings.durationProperty = durationProperty;
     if (completionProperty !== undefined) settings.completionProperty = completionProperty;
+    if (hardDeadlineProperty !== undefined) settings.hardDeadlineProperty = hardDeadlineProperty;
     if (projectColorProperty !== undefined) settings.projectColorProperty = projectColorProperty;
     if (projectColorSchemeVersion !== undefined) settings.projectColorSchemeVersion = projectColorSchemeVersion;
     if (defaultDurationHours !== undefined) settings.defaultDurationHours = defaultDurationHours;
@@ -121,6 +144,7 @@ export default class TasknotesPmPlugin extends Plugin {
     if (syncGoogleCalendarOnStartup !== undefined) settings.syncGoogleCalendarOnStartup = syncGoogleCalendarOnStartup;
     if (syncGoogleCalendarOnUpdate !== undefined) settings.syncGoogleCalendarOnUpdate = syncGoogleCalendarOnUpdate;
     if (highlightProjectCards !== undefined) settings.highlightProjectCards = highlightProjectCards;
+    if (hardDeadlineConflictPolicy !== undefined) settings.hardDeadlineConflictPolicy = hardDeadlineConflictPolicy;
     return settings;
   }
 
@@ -143,6 +167,7 @@ export default class TasknotesPmPlugin extends Plugin {
     this.updateInProgress = true;
     const summary: RunSummary = {
       scanned: 0, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0,
+      parentDurationsChanged: 0, deadlinesMoved: 0, deadlineWarnings: [],
       calendarSync: "not-run",
       invalidDurations: [], unscheduled: [], cycles: [], errors: [],
     };
@@ -161,9 +186,17 @@ export default class TasknotesPmPlugin extends Plugin {
       await this.ensureParentDependencies(api, childrenByParent, summary);
 
       const dependencies = await this.loadDependencies(api, tasks, summary);
-      const calculated = this.calculateDates(states, childrenByParent, dependencies, summary);
-      await this.writeCalculatedDates(api, states, calculated, summary);
+      this.updateParentDurationsInMemory(states, childrenByParent, this.recordedCompletions(states));
+      const deadlineSchedule = await this.scheduleHardDeadlines(states, childrenByParent, summary);
+      const calculated = this.calculateDates(states, childrenByParent, dependencies, deadlineSchedule, summary);
+      const projectDurations = this.updateParentDurationsInMemory(states, childrenByParent, calculated);
+      await this.writeParentDurations(projectDurations, summary);
+      await this.writeCalculatedDates(api, states, calculated, new Set(childrenByParent.keys()), deadlineSchedule, summary);
       this.refreshProjectCardStyles();
+      for (const leaf of this.app.workspace.getLeavesOfType(GANTT_VIEW_TYPE)) {
+        const view = leaf.view;
+        if (view instanceof TasknotesPmGanttView) void view.render();
+      }
 
       const calendarSync = await this.runGoogleCalendarSync(tasks, completedStatuses, startup, false);
       summary.calendarSync = calendarSync.status;
@@ -182,6 +215,9 @@ export default class TasknotesPmPlugin extends Plugin {
       `${summary.openTasks} open`,
       `${summary.dependenciesAdded} prerequisite${summary.dependenciesAdded === 1 ? "" : "s"} added`,
       `${summary.datesChanged} date${summary.datesChanged === 1 ? "" : "s"} updated`,
+      summary.parentDurationsChanged ? `${summary.parentDurationsChanged} parent duration${summary.parentDurationsChanged === 1 ? "" : "s"} updated` : "",
+      summary.deadlinesMoved ? `${summary.deadlinesMoved} deadline${summary.deadlinesMoved === 1 ? "" : "s"} moved` : "",
+      summary.deadlineWarnings.length ? `${summary.deadlineWarnings.length} deadline warning${summary.deadlineWarnings.length === 1 ? "" : "s"}` : "",
       summary.colorsAssigned ? `${summary.colorsAssigned} color${summary.colorsAssigned === 1 ? "" : "s"} assigned` : "",
       summary.calendarSync === "synced" ? "Google Calendar synced" : "",
       summary.calendarSync === "skipped" ? "Google Calendar sync skipped" : "",
@@ -191,6 +227,10 @@ export default class TasknotesPmPlugin extends Plugin {
       summary.errors.length ? `${summary.errors.length} error${summary.errors.length === 1 ? "" : "s"}` : "",
     ].filter(Boolean).join(" · ");
     new Notice(`Tasknotes-PM: ${detail}`, 7000);
+    if (summary.deadlineWarnings.length) {
+      console.warn("Tasknotes-PM hard deadline warnings", summary.deadlineWarnings);
+      new Notice(`Tasknotes-PM: ${summary.deadlineWarnings.join(" · ")}`, 12000);
+    }
   }
 
   /**
@@ -287,6 +327,97 @@ export default class TasknotesPmPlugin extends Plugin {
     for (const card of cards) this.styleProjectCard(card);
   }
 
+  async openGanttView(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(GANTT_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: GANTT_VIEW_TYPE, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+  }
+
+  async getGanttProjects(): Promise<GanttProject[]> {
+    const api = await this.getTaskNotesApi();
+    if (!api) throw new Error("TaskNotes runtime API v1 is unavailable");
+    await api.lifecycle.ready();
+    const tasks = await api.tasks.list();
+    const quietSummary: RunSummary = {
+      scanned: tasks.length, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0,
+      parentDurationsChanged: 0, deadlineWarnings: [], deadlinesMoved: 0, calendarSync: "not-run",
+      invalidDurations: [], unscheduled: [], cycles: [], errors: [],
+    };
+    const states = await this.createTaskStates(tasks, quietSummary, this.completedStatuses(api));
+    const childrenByParent = await this.loadChildren(api, tasks, quietSummary);
+    this.updateParentDurationsInMemory(states, childrenByParent, this.recordedCompletions(states));
+    const projects: GanttProject[] = [];
+
+    for (const [projectPath] of childrenByParent) {
+      const projectState = states.get(projectPath);
+      if (!projectState || projectState.isCompletedOrArchived) continue;
+      const rows: GanttTask[] = [];
+      this.collectGanttTasks(projectPath, projectPath, 0, states, childrenByParent, rows, new Set<string>());
+      if (rows.length < 2) continue;
+      const hue = this.projectHueFor(projectPath);
+      projects.push({ path: projectPath, name: this.taskName(projectPath), hue, tasks: rows });
+    }
+    return projects.sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  describeError(error: unknown): string {
+    return this.errorMessage(error);
+  }
+
+  private collectGanttTasks(
+    path: string,
+    rootProjectPath: string,
+    depth: number,
+    states: Map<string, TaskState>,
+    childrenByParent: Map<string, Set<string>>,
+    rows: GanttTask[],
+    seen: Set<string>,
+  ): void {
+    if (seen.has(path)) return;
+    seen.add(path);
+    const state = states.get(path);
+    if (!state || state.completionMs === null) return;
+    const childPaths = childrenByParent.get(path) ?? new Set<string>();
+    const childSpans = [...childPaths].map((childPath) => {
+      const child = states.get(childPath);
+      return child?.completionMs === null || !child ? null : {
+        start: child.completionMs - child.durationHours * HOUR_MS,
+        end: child.completionMs,
+      };
+    }).filter((span): span is { start: number; end: number } => span !== null);
+    const isProject = childPaths.size > 0;
+    const startMs = isProject && childSpans.length
+      ? Math.min(...childSpans.map((span) => span.start))
+      : state.completionMs - state.durationHours * HOUR_MS;
+    const endMs = isProject && childSpans.length
+      ? Math.max(...childSpans.map((span) => span.end))
+      : state.completionMs;
+    rows.push({ path, name: this.taskName(path), startMs, endMs, hue: this.projectHueFor(path, rootProjectPath), isProject, depth });
+    const orderedChildren = [...childPaths].sort((left, right) => {
+      const leftCompletion = states.get(left)?.completionMs ?? Number.POSITIVE_INFINITY;
+      const rightCompletion = states.get(right)?.completionMs ?? Number.POSITIVE_INFINITY;
+      return leftCompletion - rightCompletion || left.localeCompare(right);
+    });
+    for (const childPath of orderedChildren) {
+      this.collectGanttTasks(childPath, rootProjectPath, depth + 1, states, childrenByParent, rows, seen);
+    }
+  }
+
+  private projectHueFor(path: string, fallbackPath = path): number {
+    return this.projectColorHues.get(path)
+      ?? this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty])
+      ?? this.projectColorHues.get(fallbackPath)
+      ?? this.readProjectHue(this.frontmatterFor(fallbackPath)[this.settings.projectColorProperty])
+      ?? this.projectHash(fallbackPath) % 360;
+  }
+
+  private taskName(path: string): string {
+    return path.split("/").pop()?.replace(/\.md$/i, "") ?? path;
+  }
+
   private async getTaskNotesApi(): Promise<TaskNotesApi | null> {
     const pluginManager = (this.app as typeof this.app & {
       plugins: { getPlugin(id: string): unknown };
@@ -305,6 +436,11 @@ export default class TasknotesPmPlugin extends Plugin {
       const rawDuration = frontmatter[this.settings.durationProperty];
       const duration = this.readDuration(rawDuration);
       if (duration.invalid) summary.invalidDurations.push(task.path);
+      const rawHardDeadline = frontmatter[this.settings.hardDeadlineProperty];
+      const hardDeadline = this.parseCompletion(rawHardDeadline);
+      if (rawHardDeadline !== undefined && rawHardDeadline !== null && rawHardDeadline !== "" && hardDeadline === null) {
+        summary.errors.push(`${task.path}: invalid ${this.settings.hardDeadlineProperty} date`);
+      }
 
       const recordedCompletion = this.parseCompletion(frontmatter[this.settings.completionProperty]);
       const dueCompletion = this.parseCompletion(task.due);
@@ -315,6 +451,7 @@ export default class TasknotesPmPlugin extends Plugin {
       states.set(task.path, {
         durationHours: duration.value,
         completionMs: recordedDateStillMatchesDue ? recordedCompletion : dueCompletion,
+        hardDeadlineMs: hardDeadline,
         isCompletedOrArchived: Boolean(task.archived || task.completed || completedStatuses.has(task.status ?? "")),
       });
     }
@@ -471,10 +608,163 @@ export default class TasknotesPmPlugin extends Plugin {
     }
   }
 
+  private recordedCompletions(states: Map<string, TaskState>): Map<string, number> {
+    const completions = new Map<string, number>();
+    for (const [path, state] of states) {
+      if (state.completionMs !== null) completions.set(path, state.completionMs);
+    }
+    return completions;
+  }
+
+  private updateParentDurationsInMemory(
+    states: Map<string, TaskState>,
+    childrenByParent: Map<string, Set<string>>,
+    completions: Map<string, number>,
+  ): Map<string, number> {
+    const durations = new Map<string, number>();
+    const visiting = new Set<string>();
+    const visit = (parentPath: string): number | null => {
+      if (durations.has(parentPath)) return durations.get(parentPath) ?? null;
+      if (visiting.has(parentPath)) return null;
+      visiting.add(parentPath);
+      const childPaths = [...(childrenByParent.get(parentPath) ?? [])];
+      const spans: Array<{ start: number; end: number }> = [];
+      for (const childPath of childPaths) {
+        if (childrenByParent.has(childPath)) visit(childPath);
+        const child = states.get(childPath);
+        const completion = completions.get(childPath);
+        if (!child || completion === undefined || !Number.isFinite(completion)) continue;
+        spans.push({ start: completion - child.durationHours * HOUR_MS, end: completion });
+      }
+      visiting.delete(parentPath);
+      if (!childPaths.length || spans.length !== childPaths.length) return null;
+      const hours = (Math.max(...spans.map((span) => span.end)) - Math.min(...spans.map((span) => span.start))) / HOUR_MS;
+      if (!Number.isFinite(hours) || hours <= 0) return null;
+      durations.set(parentPath, hours);
+      const parent = states.get(parentPath);
+      if (parent) parent.durationHours = hours;
+      return hours;
+    };
+    for (const parentPath of childrenByParent.keys()) visit(parentPath);
+    return durations;
+  }
+
+  private async writeParentDurations(durations: Map<string, number>, summary: RunSummary): Promise<void> {
+    for (const [path, duration] of durations) {
+      const current = this.readDuration(this.frontmatterFor(path)[this.settings.durationProperty]);
+      if (!current.invalid && Math.abs(current.value - duration) < 0.001) continue;
+      try {
+        await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          metadata[this.settings.durationProperty] = Number(duration.toFixed(2));
+        });
+        summary.parentDurationsChanged++;
+      } catch (error) {
+        summary.errors.push(`${path}: unable to update parent duration (${this.errorMessage(error)})`);
+      }
+    }
+  }
+
+  private async scheduleHardDeadlines(
+    states: Map<string, TaskState>,
+    childrenByParent: Map<string, Set<string>>,
+    summary: RunSummary,
+  ): Promise<DeadlineSchedule> {
+    const forcedCompletions = new Map<string, number>();
+    const parentDeadlines = new Map<string, number>();
+    const movedDeadlineUpdates = new Map<string, number>();
+    const scheduling = new Set<string>();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const scheduleProject = (parentPath: string, requestedDeadline: number, warnForPastStart: boolean, forceAll = false): void => {
+      const previousDeadline = parentDeadlines.get(parentPath);
+      if (previousDeadline !== undefined && previousDeadline <= requestedDeadline) return;
+      if (scheduling.has(parentPath)) return;
+      const childPaths = [...(childrenByParent.get(parentPath) ?? [])];
+      if (!childPaths.length) return;
+      scheduling.add(parentPath);
+      const ordered = childPaths.sort((left, right) => {
+        const leftCompletion = forcedCompletions.get(left) ?? states.get(left)?.completionMs ?? Number.POSITIVE_INFINITY;
+        const rightCompletion = forcedCompletions.get(right) ?? states.get(right)?.completionMs ?? Number.POSITIVE_INFINITY;
+        return leftCompletion - rightCompletion || left.localeCompare(right);
+      });
+      let deadline = requestedDeadline;
+      let cursor = deadline - DAY_MS;
+      const theoretical = new Map<string, number>();
+      for (let index = ordered.length - 1; index >= 0; index--) {
+        const childPath = ordered[index];
+        theoretical.set(childPath, cursor);
+        cursor -= (states.get(childPath)?.durationHours ?? this.settings.defaultDurationHours) * HOUR_MS;
+      }
+
+      const startsBeforeToday = warnForPastStart && cursor < today.getTime();
+      let movedToToday = false;
+      if (startsBeforeToday) {
+        if (this.settings.hardDeadlineConflictPolicy === "move-deadline") {
+          const shiftDays = Math.ceil((today.getTime() - cursor) / DAY_MS);
+          const shift = shiftDays * DAY_MS;
+          deadline += shift;
+          for (const [path, completion] of theoretical) theoretical.set(path, completion + shift);
+          const parent = states.get(parentPath);
+          if (parent) parent.hardDeadlineMs = deadline;
+          movedDeadlineUpdates.set(parentPath, deadline);
+          movedToToday = true;
+          summary.deadlinesMoved++;
+          summary.deadlineWarnings.push(`${this.taskName(parentPath)} moved ${shiftDays} day${shiftDays === 1 ? "" : "s"} so work can begin today.`);
+        } else {
+          summary.deadlineWarnings.push(`${this.taskName(parentPath)} begins before today; the deadline was honored and overdue tasks were allowed.`);
+        }
+      }
+
+      parentDeadlines.set(parentPath, deadline);
+      for (const childPath of ordered) {
+        const target = theoretical.get(childPath) as number;
+        const childState = states.get(childPath);
+        const existing = forcedCompletions.get(childPath) ?? childState?.completionMs;
+        const mustMove = forceAll || movedToToday;
+        if (childState?.isCompletedOrArchived) {
+          if (existing === null || existing === undefined) {
+            summary.deadlineWarnings.push(`${this.taskName(childPath)} is completed without a due date and was not changed by ${this.taskName(parentPath)}'s hard deadline.`);
+          } else if (existing > target) {
+            summary.deadlineWarnings.push(`${this.taskName(childPath)} is already completed after ${this.taskName(parentPath)}'s allowable child date and was not changed.`);
+          }
+          continue;
+        }
+        if (mustMove || existing === null || existing === undefined || existing > target) {
+          const currentForced = forcedCompletions.get(childPath);
+          forcedCompletions.set(childPath, currentForced === undefined ? target : Math.min(currentForced, target));
+        }
+        const childCompletion = forcedCompletions.get(childPath) ?? existing;
+        if (childCompletion !== null && childCompletion !== undefined && childrenByParent.has(childPath)) {
+          scheduleProject(childPath, childCompletion, false, mustMove);
+        }
+      }
+      scheduling.delete(parentPath);
+    };
+
+    const explicit = [...childrenByParent.keys()]
+      .filter((path) => states.get(path)?.hardDeadlineMs != null)
+      .sort((left, right) => left.localeCompare(right));
+    for (const parentPath of explicit) scheduleProject(parentPath, states.get(parentPath)?.hardDeadlineMs as number, true);
+    for (const [parentPath, deadline] of movedDeadlineUpdates) {
+      try {
+        await this.app.fileManager.processFrontMatter(this.fileFor(parentPath), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          metadata[this.settings.hardDeadlineProperty] = this.formatDueDate(deadline);
+        });
+      } catch (error) {
+        summary.errors.push(`${parentPath}: unable to move hard deadline (${this.errorMessage(error)})`);
+      }
+    }
+    return { forcedCompletions, parentDeadlines };
+  }
+
   private calculateDates(
     states: Map<string, TaskState>,
     childrenByParent: Map<string, Set<string>>,
     dependencies: Map<string, ResolvedDependency[]>,
+    deadlineSchedule: DeadlineSchedule,
     summary: RunSummary,
   ): Map<string, number> {
     const result = new Map<string, number>();
@@ -485,7 +775,10 @@ export default class TasknotesPmPlugin extends Plugin {
     const visit = (path: string): number | null => {
       const state = states.get(path);
       if (!state) return null;
-      if (result.has(path)) return result.get(path) ?? null;
+      if (result.has(path)) {
+        const cached = result.get(path);
+        return cached !== undefined && Number.isFinite(cached) ? cached : null;
+      }
       if (visiting.has(path)) {
         const cycleStart = stack.indexOf(path);
         const cycle = [...stack.slice(cycleStart), path];
@@ -498,9 +791,11 @@ export default class TasknotesPmPlugin extends Plugin {
       stack.push(path);
       const candidates: number[] = [];
       const childPaths = childrenByParent.get(path) ?? new Set<string>();
+      let unresolvedChild = false;
       for (const childPath of childPaths) {
         const childCompletion = visit(childPath);
-        if (childCompletion !== null) candidates.push(childCompletion + this.settings.projectBufferHours * HOUR_MS);
+        if (childCompletion !== null) candidates.push(childCompletion + DAY_MS);
+        else unresolvedChild = true;
       }
 
       for (const dependency of dependencies.get(path) ?? []) {
@@ -517,11 +812,19 @@ export default class TasknotesPmPlugin extends Plugin {
       if (cyclePaths.has(path)) return null;
 
       const desired = candidates.length ? Math.max(...candidates) : null;
-      const completion = desired === null
-        ? state.completionMs
-        : state.completionMs === null ? desired : Math.max(state.completionMs, desired);
+      const scheduledDeadline = deadlineSchedule.parentDeadlines.get(path);
+      const forcedCompletion = deadlineSchedule.forcedCompletions.get(path);
+      let completion: number | null;
+      if (scheduledDeadline !== undefined) completion = scheduledDeadline;
+      else if (forcedCompletion !== undefined) completion = forcedCompletion;
+      else if (childPaths.size && unresolvedChild) completion = state.completionMs;
+      else if (childPaths.size && desired !== null) completion = desired;
+      else if (desired === null) completion = state.completionMs;
+      else completion = state.completionMs === null ? desired : Math.max(state.completionMs, desired);
       result.set(path, completion ?? NaN);
-      if (completion === null && (childPaths.size || (dependencies.get(path)?.length ?? 0) > 0)) summary.unscheduled.push(path);
+      if ((completion === null && (childPaths.size || (dependencies.get(path)?.length ?? 0) > 0)) || unresolvedChild) {
+        if (!summary.unscheduled.includes(path)) summary.unscheduled.push(path);
+      }
       return completion;
     };
 
@@ -530,12 +833,23 @@ export default class TasknotesPmPlugin extends Plugin {
     return result;
   }
 
-  private async writeCalculatedDates(api: TaskNotesApi, states: Map<string, TaskState>, calculated: Map<string, number>, summary: RunSummary): Promise<void> {
+  private async writeCalculatedDates(
+    api: TaskNotesApi,
+    states: Map<string, TaskState>,
+    calculated: Map<string, number>,
+    projectPaths: Set<string>,
+    deadlineSchedule: DeadlineSchedule,
+    summary: RunSummary,
+  ): Promise<void> {
     const context = this.context("Update project dates");
     for (const [path, completionMs] of calculated) {
       const state = states.get(path);
       if (!state || state.isCompletedOrArchived || !Number.isFinite(completionMs)) continue;
-      if (state.completionMs !== null && completionMs <= state.completionMs) continue;
+      const exact = projectPaths.has(path) || deadlineSchedule.forcedCompletions.has(path) || deadlineSchedule.parentDeadlines.has(path);
+      if (state.completionMs !== null) {
+        if (exact && Math.abs(completionMs - state.completionMs) < 1000) continue;
+        if (!exact && completionMs <= state.completionMs) continue;
+      }
 
       try {
         await api.tasks.setDue(path, this.formatDueDate(completionMs), context);
@@ -544,6 +858,7 @@ export default class TasknotesPmPlugin extends Plugin {
           metadata[this.settings.completionProperty] = new Date(completionMs).toISOString();
         });
         summary.datesChanged++;
+        state.completionMs = completionMs;
       } catch (error) {
         summary.errors.push(`${path}: unable to set due date (${this.errorMessage(error)})`);
       }
