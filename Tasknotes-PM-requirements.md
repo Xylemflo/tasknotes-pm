@@ -1,6 +1,6 @@
 # Tasknotes-PM — Requirements
 
-**Status:** Implemented through version 0.2.0  
+**Status:** Implemented through version 0.2.1  
 **Updated:** 2026-11-26  
 **Target:** An Obsidian community plugin that complements TaskNotes 4.14+  
 **Working name / plugin ID:** `tasknotes-pm`
@@ -217,4 +217,4 @@ The requested automatic start-up run can change many task files immediately afte
 
 ## 10. Implementation readiness
 
-Version 0.2.0 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin.
+Version 0.2.1 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. It also restores persisted project colors to Kanban cards after Obsidian starts, including when startup scheduling is disabled.

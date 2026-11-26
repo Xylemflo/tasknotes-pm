@@ -84,6 +84,9 @@ export default class TasknotesPmPlugin extends Plugin {
 
     this.installKanbanObserver();
     this.app.workspace.onLayoutReady(() => {
+      // Card colors are persisted in task frontmatter, so they should render
+      // even when the user has disabled the startup scheduling pass.
+      this.refreshProjectCardStyles();
       if (this.settings.updateOnStartup) {
         void this.updateProjectDates(true);
       } else if (this.settings.syncGoogleCalendarOnStartup) {
@@ -1021,7 +1024,10 @@ export default class TasknotesPmPlugin extends Plugin {
       return;
     }
     const path = this.pathForCard(card);
-    const hue = path ? this.projectColorHues.get(path) : undefined;
+    const persistedHue = path
+      ? this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty])
+      : null;
+    const hue = path ? this.projectColorHues.get(path) ?? persistedHue ?? undefined : undefined;
     card.toggleClass("tasknotes-pm-project-card", hue !== undefined);
     if (hue === undefined) {
       card.style.removeProperty("--tasknotes-pm-project-hue");
