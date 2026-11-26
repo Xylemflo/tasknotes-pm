@@ -1,6 +1,6 @@
 # Tasknotes-PM — Requirements
 
-**Status:** Implemented through version 0.2.2  
+**Status:** Implemented through version 0.2.3  
 **Updated:** 2026-11-26  
 **Target:** An Obsidian community plugin that complements TaskNotes 4.14+  
 **Working name / plugin ID:** `tasknotes-pm`
@@ -85,24 +85,25 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
    ```
 
    This applies whether the prerequisite appears as the target task’s `blockedBy` relationship or as another task’s reciprocal `blocking` relationship.
-2. For a project, calculate its due date as:
+2. For a project with one or more active direct subtasks, calculate its due date as:
 
    ```text
-   latest direct-subtask completion date + 24 hours
+   latest active direct-subtask completion date + 24 hours
    ```
 
-   The one-day allowance is fixed. The project's recalculated duration describes the child-work span and is not added again.
-3. Nested projects are evaluated from deepest child toward the root so a nested project’s calculated due date becomes the completion date used by its parent.
-4. When a task has both ordinary prerequisites and project-child prerequisites, calculate the date that satisfies all prerequisites—the latest resulting completion date wins.
-5. A task with no due date and no schedulable predecessor cannot receive a computed due date solely from its duration. It is listed as unscheduled in the result summary.
-6. The updater must not move a calculated due date earlier than an explicit due date unless an approved setting expressly permits date compression. **Proposed default:** only extend dates (never pull work earlier).
-7. Completed/archived tasks are read as predecessors when linked but their own due dates are not recalculated by default. They still constrain successors by their recorded due date.
+   The one-day allowance is fixed. Completed and archived children do not influence this date. The project's recalculated duration describes the child-work span and is not added again.
+3. If a project has no active direct children, preserve its existing due date. If any active child is unresolved or undated, known constraints may extend the parent but must not bring it forward; report the unresolved schedule.
+4. Nested projects are evaluated from deepest child toward the root so an active nested project’s calculated or preserved due date becomes the completion date used by its parent.
+5. When a task has both ordinary prerequisites and active project-child prerequisites, calculate the date that satisfies all prerequisites—the latest resulting completion date wins.
+6. A task with no due date and no schedulable predecessor cannot receive a computed due date solely from its duration. It is listed as unscheduled in the result summary.
+7. Ordinary prerequisite calculations are extend-only. Active, fully scheduled project children may bring a parent date forward or push it later. Hard deadlines remain an explicit exception that may compress dates.
+8. Completed/archived tasks are read as ordinary predecessors when linked but their own due dates are not recalculated by default. A completed or archived direct project child must not re-enter its parent's rollup through the prerequisite relationship.
 
 ### 4.3.1 Hard deadlines and backward scheduling
 
 1. The configurable frontmatter property `hardDeadline` accepts an ISO date (`YYYY-MM-DD`) on a parent task.
 2. A hard-deadline parent is due on that date instead of one day after the latest currently dated child.
-3. Schedule direct children backward from one day before the hard deadline, subtracting each child's duration. Use current due-date order, then path order for deterministic ties or missing dates.
+3. Schedule active direct children backward from one day before the hard deadline, subtracting each child's duration. Completed and archived children consume no backward-scheduling capacity. Use current due-date order, then path order for deterministic ties or missing dates.
 4. Retain an existing child due date when it already fits at or before its allowable backward-schedule position. Move only missing or noncompliant dates unless the conflict policy requires a full shift.
 5. Apply backward scheduling recursively through nested projects so every descendant completes within its containing project span.
 6. Warn when the calculated work span begins before the current local date.
@@ -135,7 +136,7 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
 1. Register **`Tasknotes-PM: Open Gantt View`** as a native Obsidian view command.
 2. Allow the view to display either one selected project or all open projects.
 3. Show nested project tasks recursively with parent/child indentation.
-4. Derive each bar's start from `completion − duration` and render parent bars across their calculated child span.
+4. Derive each task bar's start from `completion − duration`. Render a parent bar from the earliest child start through the later of its own due date or latest child completion, so a preserved parent date remains visible.
 5. Use the persisted exact project color for every project and task bar.
 6. Render weekly tick marks in the timeline header, aligned with the weekly chart grid.
 7. Make every task name and timeline bar a link to that task's TaskNote.
@@ -222,4 +223,4 @@ The requested automatic start-up run can change many task files immediately afte
 
 ## 10. Implementation readiness
 
-Version 0.2.2 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. It migrates project identities to the approved exact-color palette, maximizes perceptual separation for additional colors, removes stale markers from tasks that leave projects, and keeps Kanban and Gantt colors aligned.
+Version 0.2.3 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. Parent rollups use only active children, preserve the parent date when none remain, protect unresolved schedules from compression, exclude closed children from hard-deadline spacing, and extend Gantt parent bars through preserved due dates.

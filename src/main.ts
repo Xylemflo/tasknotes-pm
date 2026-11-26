@@ -1,6 +1,7 @@
 import { Notice, Plugin, TFile, normalizePath } from "obsidian";
 import { GANTT_VIEW_TYPE, TasknotesPmGanttView } from "./gantt-view";
 import { APPROVED_PROJECT_COLORS, buildDistinctProjectPalette, nextDistinctProjectColor, normalizeProjectColor } from "./project-colors";
+import { resolveOrdinaryCompletion } from "./scheduling";
 import { DEFAULT_SETTINGS, TasknotesPmSettingTab, type TasknotesPmSettings } from "./settings";
 import type { GanttProject, GanttTask, MutationContext, ResolvedDependency, TaskInfo, TaskNotesApi, TaskNotesPlugin } from "./types";
 
@@ -430,7 +431,7 @@ export default class TasknotesPmPlugin extends Plugin {
       ? Math.min(...childSpans.map((span) => span.start))
       : state.completionMs - state.durationHours * HOUR_MS;
     const endMs = isProject && childSpans.length
-      ? Math.max(...childSpans.map((span) => span.end))
+      ? Math.max(state.completionMs, ...childSpans.map((span) => span.end))
       : state.completionMs;
     rows.push({ path, name: this.taskName(path), startMs, endMs, color: this.projectColorFor(path, rootProjectPath), isProject, depth });
     const orderedChildren = [...childPaths].sort((left, right) => {
@@ -746,8 +747,14 @@ export default class TasknotesPmPlugin extends Plugin {
       const previousDeadline = parentDeadlines.get(parentPath);
       if (previousDeadline !== undefined && previousDeadline <= requestedDeadline) return;
       if (scheduling.has(parentPath)) return;
-      const childPaths = [...(childrenByParent.get(parentPath) ?? [])];
-      if (!childPaths.length) return;
+      const childPaths = [...(childrenByParent.get(parentPath) ?? [])]
+        .filter((childPath) => states.get(childPath)?.isCompletedOrArchived !== true);
+      if (!childPaths.length) {
+        // A hard deadline remains authoritative even after all children close,
+        // but closed children must not consume backward-scheduling capacity.
+        parentDeadlines.set(parentPath, requestedDeadline);
+        return;
+      }
       scheduling.add(parentPath);
       const ordered = childPaths.sort((left, right) => {
         const leftCompletion = forcedCompletions.get(left) ?? states.get(left)?.completionMs ?? Number.POSITIVE_INFINITY;
@@ -855,16 +862,26 @@ export default class TasknotesPmPlugin extends Plugin {
       visiting.add(path);
       stack.push(path);
       const candidates: number[] = [];
-      const childPaths = childrenByParent.get(path) ?? new Set<string>();
-      let unresolvedChild = false;
-      for (const childPath of childPaths) {
+      const allChildPaths = childrenByParent.get(path) ?? new Set<string>();
+      const activeChildPaths = new Set<string>();
+      let unresolvedActiveChild = false;
+      for (const childPath of allChildPaths) {
+        const childState = states.get(childPath);
+        if (!childState) {
+          unresolvedActiveChild = true;
+          continue;
+        }
+        if (childState.isCompletedOrArchived) continue;
+        activeChildPaths.add(childPath);
         const childCompletion = visit(childPath);
         if (childCompletion !== null) candidates.push(childCompletion + DAY_MS);
-        else unresolvedChild = true;
+        else unresolvedActiveChild = true;
       }
 
       for (const dependency of dependencies.get(path) ?? []) {
-        if (!dependency.path || childPaths.has(dependency.path)) continue;
+        // Use every current child path here, not only active children. Otherwise
+        // a completed child would re-enter the date calculation as a dependency.
+        if (!dependency.path || allChildPaths.has(dependency.path)) continue;
         if (dependency.dependency.reltype && dependency.dependency.reltype !== "FINISHTOSTART") continue;
         const predecessorCompletion = visit(dependency.path);
         if (predecessorCompletion !== null) {
@@ -882,12 +899,14 @@ export default class TasknotesPmPlugin extends Plugin {
       let completion: number | null;
       if (scheduledDeadline !== undefined) completion = scheduledDeadline;
       else if (forcedCompletion !== undefined) completion = forcedCompletion;
-      else if (childPaths.size && unresolvedChild) completion = state.completionMs;
-      else if (childPaths.size && desired !== null) completion = desired;
-      else if (desired === null) completion = state.completionMs;
-      else completion = state.completionMs === null ? desired : Math.max(state.completionMs, desired);
+      else completion = resolveOrdinaryCompletion({
+        currentCompletionMs: state.completionMs,
+        desiredCompletionMs: desired,
+        activeChildCount: activeChildPaths.size,
+        hasUnresolvedActiveChild: unresolvedActiveChild,
+      });
       result.set(path, completion ?? NaN);
-      if ((completion === null && (childPaths.size || (dependencies.get(path)?.length ?? 0) > 0)) || unresolvedChild) {
+      if ((completion === null && (activeChildPaths.size || (dependencies.get(path)?.length ?? 0) > 0)) || unresolvedActiveChild) {
         if (!summary.unscheduled.includes(path)) summary.unscheduled.push(path);
       }
       return completion;

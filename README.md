@@ -18,12 +18,12 @@ Tasknotes-PM works entirely within the active vault. It does not make network re
 - Each direct subtask is added as a finish-to-start prerequisite of its parent.
 - Missing child `duration` values are written as `24` hours.
 - A parent duration is recalculated as the complete span from its earliest child's start through its latest child's completion.
-- A parent due date becomes its latest direct child due date plus one day.
+- A parent with active children is due one day after its latest active direct child. Completed and archived children are ignored; when no active children remain, the existing parent due date is preserved.
 - A parent with `hardDeadline: YYYY-MM-DD` is due on that deadline and its children are scheduled backward, in existing due-date order, so the final child completes one day before the deadline.
 - Existing child dates that already fit the backward schedule are preserved.
 - If the required work begins before today, the plugin warns and follows the configured policy: honor the deadline and allow overdue tasks, or move the deadline and parent due date forward.
 - A normal finish-to-start successor is scheduled after the latest predecessor due date, plus a 24-hour gap and the successor duration.
-- Ordinary dependency calculations remain extend-only. Parent rollups and hard-deadline assignments are exact and may move dates earlier when required.
+- Ordinary dependency calculations remain extend-only. Fully scheduled active-child rollups are exact and may move a parent earlier or later. Hard deadlines remain authoritative.
 - Exact calculated times are retained in `tasknotesPmCompletion`; TaskNotes receives a date-only `due` value for normal display.
 - Project cards and their children retain their persisted exact hex colors in TaskNotes Kanban and Tasknotes-PM Gantt views. The first ten colors use the approved categorical palette; later colors maximize perceptual distance from all colors already in use.
 
@@ -35,7 +35,7 @@ After enabling Tasknotes-PM, run **Tasknotes-PM: Update Project Dates** from the
 
 The project-date update can dispatch TaskNotes' built-in **Sync all tasks** action so TaskNotes refreshes Google Calendar events for the vault's open tasks. Startup and post-update syncing can be controlled independently, or **Tasknotes-PM: Sync Open Tasks to Google Calendar** can be run manually.
 
-Run **Tasknotes-PM: Open Gantt View** to open the timeline. Use the selector to show one project or all open projects. Nested tasks are included, each bar uses its persisted project color, and the header is divided into weekly intervals. Select a task name or timeline bar to open its TaskNote.
+Run **Tasknotes-PM: Open Gantt View** to open the timeline. Use the selector to show one project or all open projects. Nested tasks are included, parent bars extend through their preserved due dates, each bar uses its persisted project color, and the header is divided into weekly intervals. Select a task name or timeline bar to open its TaskNote.
 
 Each run reports scan, prerequisite, date-update, unscheduled, cycle, and error counts. Cyclic or unresolved relationships are left untouched.
 
