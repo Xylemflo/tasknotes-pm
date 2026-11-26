@@ -1,6 +1,7 @@
-# Tasknotes-PM — Requirements Draft
+# Tasknotes-PM — Requirements
 
-**Status:** Draft for approval  
+**Status:** Implemented through version 0.2.0  
+**Updated:** 2026-11-26  
 **Target:** An Obsidian community plugin that complements TaskNotes 4.14+  
 **Working name / plugin ID:** `tasknotes-pm`
 
@@ -69,8 +70,9 @@ The actual serialized relationship shape will be written through the TaskNotes A
 
 1. Add `duration` to frontmatter for tasks that Tasknotes-PM creates or modifies, using `24` when absent.
 2. A supplied numeric duration is interpreted as hours.
-3. The updater must not alter a valid user-supplied duration.
-4. Invalid duration values are treated as 24 hours and reported in the run summary; they are not silently replaced unless the user explicitly requests normalization in a future setting.
+3. Preserve a valid user-supplied duration for an ordinary task.
+4. Recalculate every schedulable parent's duration as the elapsed span from the earliest direct child's implicit start through the latest direct child's completion. Resolve nested parent durations deepest-first.
+5. Invalid duration values are treated as 24 hours and reported in the run summary.
 
 ### 4.3 Date calculations
 
@@ -89,12 +91,22 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
    latest direct-subtask completion date + 24 hours
    ```
 
-   A project’s own duration is not added to this project roll-up; the 24-hour parent buffer is the defined project completion allowance.
+   The one-day allowance is fixed. The project's recalculated duration describes the child-work span and is not added again.
 3. Nested projects are evaluated from deepest child toward the root so a nested project’s calculated due date becomes the completion date used by its parent.
 4. When a task has both ordinary prerequisites and project-child prerequisites, calculate the date that satisfies all prerequisites—the latest resulting completion date wins.
 5. A task with no due date and no schedulable predecessor cannot receive a computed due date solely from its duration. It is listed as unscheduled in the result summary.
 6. The updater must not move a calculated due date earlier than an explicit due date unless an approved setting expressly permits date compression. **Proposed default:** only extend dates (never pull work earlier).
 7. Completed/archived tasks are read as predecessors when linked but their own due dates are not recalculated by default. They still constrain successors by their recorded due date.
+
+### 4.3.1 Hard deadlines and backward scheduling
+
+1. The configurable frontmatter property `hardDeadline` accepts an ISO date (`YYYY-MM-DD`) on a parent task.
+2. A hard-deadline parent is due on that date instead of one day after the latest currently dated child.
+3. Schedule direct children backward from one day before the hard deadline, subtracting each child's duration. Use current due-date order, then path order for deterministic ties or missing dates.
+4. Retain an existing child due date when it already fits at or before its allowable backward-schedule position. Move only missing or noncompliant dates unless the conflict policy requires a full shift.
+5. Apply backward scheduling recursively through nested projects so every descendant completes within its containing project span.
+6. Warn when the calculated work span begins before the current local date.
+7. Provide two policies: honor the hard deadline and permit immediately overdue tasks, or move the hard deadline and parent due date forward by whole days until work can begin today.
 
 ### 4.4 Update command and start-up behavior
 
@@ -107,12 +119,21 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
 
 ### 4.5 Kanban treatment
 
-1. In TaskNotes Kanban views, a project task and each of its direct subtasks must use the same deterministic, project-specific HSL background color.
-2. The selected hue must be saved in plugin-owned task frontmatter so it is preserved when the vault syncs to another device. The rendering code must not depend on TaskNotes Project Colors.
-3. A nested project uses its own project color with its direct children; it does not inherit its outer project's color when acting as a parent.
+1. In TaskNotes Kanban views, a project and its direct children use the project's persisted color.
+2. A nested project uses its own persisted color for itself and its direct children.
 3. The styling must preserve readable foreground text, status controls, icons, keyboard focus, hover state, and the user’s light/dark theme contrast.
 4. Apply the style without changing a task’s status, tags, priority, or any TaskNotes data unrelated to this feature.
 5. The implementation may use a plugin-owned CSS class and a small, documented marker property only if TaskNotes’ Bases/Kanban renderer cannot reliably expose the project state. The marker must be maintained by the updater and be opt-out/configurable.
+
+### 4.6 Gantt timeline
+
+1. Register **`Tasknotes-PM: Open Gantt View`** as a native Obsidian view command.
+2. Allow the view to display either one selected project or all open projects.
+3. Show nested project tasks recursively with parent/child indentation.
+4. Derive each bar's start from `completion − duration` and render parent bars across their calculated child span.
+5. Use the persisted project hue for every project and task bar.
+6. Render weekly tick marks in the timeline header, aligned with the weekly chart grid.
+7. Make every task name and timeline bar a link to that task's TaskNote.
 
 ## 5. User-facing settings
 
@@ -120,11 +141,14 @@ The initial settings screen should provide:
 
 1. Duration property name, default `duration`.
 2. Default duration in hours, default `24`.
-3. Parent completion buffer in hours, default `24`.
-4. Dependency gap in hours, default `24`.
-5. Date policy: proposed default **extend-only**, with an optional future/advanced choice to recalculate exact dates and allow earlier dates.
-6. Start-up update enabled, default on.
-7. Kanban project-card highlighting enabled, default on.
+3. Dependency gap in hours, default `24`.
+4. Date policy: ordinary dependencies are **extend-only**; parent rollups and hard-deadline schedules are exact.
+5. Start-up update enabled, default on.
+6. Kanban project-card highlighting enabled, default on.
+7. Hard-deadline property name, default `hardDeadline`.
+8. Hard-deadline conflict policy: honor deadline/create overdue tasks (default), or move deadline forward.
+
+The parent completion allowance is fixed at one day in version 0.2.0; the former configurable project-buffer setting is no longer exposed.
 
 Changing defaults affects subsequent calculations; it does not rewrite every task until the next explicit or start-up update.
 
@@ -145,43 +169,38 @@ Changing defaults affects subsequent calculations; it does not rewrite every tas
 4. A task without a `duration` receives the default scheduling value of 24 hours without overwriting a valid explicit value.
 5. The command produces the same result as the start-up update and is safe to run repeatedly.
 6. Existing unrelated TaskNotes dependencies survive an update unchanged.
-7. A project task and its direct child cards share their project-specific color, while an unrelated task has no project-color treatment.
+7. Project and child cards retain their persisted project hues in Kanban views.
 8. Cycles and unresolved links do not cause partial corrupt dependency rewrites or a loop.
+9. A parent's duration equals the complete span of its dated children and its due date equals the latest child due date plus one day.
+10. A hard-deadline parent retains that deadline as its due date and its children are back-scheduled without changing already compliant dates.
+11. A hard-deadline schedule that starts before today warns and follows the selected conflict policy.
+12. The Gantt view can switch between a single project and all open projects, includes nested children, renders weekly header ticks, retains persisted project hues, and opens the correct TaskNote from either its name or timeline bar.
 
-## 8. Critical concerns and decisions required before build
+## 8. Resolved design decisions and current constraints
 
-### A. Hour durations versus TaskNotes date-only due field — approval required
+### A. Hour durations versus TaskNotes date-only due field
 
-TaskNotes documents `due` as an ISO date (for example `2026-10-26`), while `scheduled` supports a date-time. A 4-hour or 12-hour duration cannot be represented exactly in a date-only due field. The build needs one approved policy:
+TaskNotes receives a date-only `due` value. Tasknotes-PM retains the exact calculated instant in `tasknotesPmCompletion`, preserving sub-day durations for subsequent calculations.
 
-1. **Recommended:** use date-time values for calculated due dates if TaskNotes accepts and displays them correctly; otherwise retain the time in a Tasknotes-PM-specific completion timestamp while exposing a date-only `due` value.
-2. Keep TaskNotes due dates date-only and round calculated results up to the next calendar day. This loses intraday precision but keeps the default TaskNotes presentation.
-3. Limit the first release to 24-hour increments despite accepting a numeric hours field.
+### B. User-authored due dates versus calculated due dates
 
-### B. User-authored due dates versus calculated due dates — approval required
+Ordinary dependencies remain extend-only. Parent rollups are exact because their dates are derived from children. Hard-deadline assignments are exact for missing or noncompliant child dates; already compliant dates remain unchanged.
 
-The proposed extend-only policy preserves manual deadlines but means a manually late child can push dates later, while a manually early child is never pulled earlier by a new calculation. Exact recalculation gives a purer schedule but overwrites manual changes. The preferred default is **extend-only** with a clearly labelled exact-recalculate setting/command added later.
+### C. Removing managed dependencies
 
-### C. Removing managed dependencies — approval required
+Tasknotes-PM never removes dependencies automatically because TaskNotes does not distinguish plugin-created relationships from identical user-created relationships.
 
-TaskNotes does not distinguish a dependency created by this plugin from an identical dependency created by a user. To safely remove a relationship when a task stops being a subtask, Tasknotes-PM needs either:
+### D. Multiple parents
 
-1. a hidden/plugin-owned marker that records the relationship it created; or
-2. a conservative policy that never removes dependencies automatically.
-
-The recommended first release is the conservative policy; it prevents accidental deletion but can leave former parent/child blockers for the user to remove.
-
-### D. Multiple parents — approval required
-
-TaskNotes allows a child task to be assigned to several `projects`. Under this specification, the child blocks every parent. This is consistent but may create unexpected critical paths. The alternative is to flag multi-parent tasks and require the user to choose one scheduling parent.
+One child blocks every parent to which TaskNotes assigns it. If multiple hard deadlines constrain the same child, the earliest required completion wins.
 
 ### E. Dependency semantics
 
-TaskNotes preserves relationship types and gaps, but its current built-in blocking behavior does not itself perform relationship-type-specific scheduling. Tasknotes-PM will schedule only `FINISHTOSTART` in version 1 and treat a missing type as `FINISHTOSTART`. Other types (`FINISHTOFINISH`, `STARTTOSTART`, `STARTTOFINISH`) must be preserved but reported as unsupported rather than silently interpreted.
+Tasknotes-PM schedules only `FINISHTOSTART` and treats a missing type as `FINISHTOSTART`. Other types are preserved but not interpreted.
 
 ### F. Kanban implementation risk
 
-TaskNotes v4 Kanban is rendered through Obsidian Bases. Whether a third-party plugin can safely apply a per-card class must be confirmed against the installed TaskNotes and Obsidian versions. The fallback is a plugin-managed `tasknotesPmProjectColor` property with a documented Bases/CSS rule. This is visually reliable and persists through sync, but adds a visible custom field unless hidden in the user’s view configuration.
+TaskNotes Kanban cards are styled with plugin-owned CSS classes and persisted hue metadata. Card matching still depends on TaskNotes' rendered card attributes and metadata.
 
 ### G. Start-up writes and vault synchronization
 
@@ -189,7 +208,7 @@ The requested automatic start-up run can change many task files immediately afte
 
 ## 9. Out of scope for version 1
 
-- Gantt charts, resource allocation, critical-path visualization, or auto-scheduling from “today.”
+- Resource allocation, critical-path visualization, drag-to-reschedule, or dependency arrows in the Gantt view.
 - Business days, holidays, working hours, time zones beyond the user’s local Obsidian time zone, and duration units other than hours.
 - Automatically creating task notes, projects, or subtasks.
 - Editing TaskNotes’ core views or TaskNotes’ own source code.
@@ -198,4 +217,4 @@ The requested automatic start-up run can change many task files immediately afte
 
 ## 10. Implementation readiness
 
-After the decisions in Section 8 are approved, implementation can proceed as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. The first engineering milestone will validate the installed TaskNotes API and Bases Kanban rendering surface before any scheduling mutations are enabled.
+Version 0.2.0 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin.
