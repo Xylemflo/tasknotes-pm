@@ -90,7 +90,7 @@ export class TasknotesPmGanttView extends ItemView {
       const section = chart.createDiv({ cls: "tasknotes-pm-gantt-project" });
       const heading = section.createDiv({ cls: "tasknotes-pm-gantt-project-heading" });
       const swatch = heading.createSpan({ cls: "tasknotes-pm-gantt-swatch" });
-      swatch.style.setProperty("--tasknotes-pm-project-hue", String(project.hue));
+      swatch.style.setProperty("--tasknotes-pm-project-color", project.color);
       this.createTaskLink(heading, project.path, project.name, "tasknotes-pm-gantt-project-link");
       for (const task of project.tasks) this.drawTask(section, task, min, range);
     }
@@ -124,7 +124,7 @@ export class TasknotesPmGanttView extends ItemView {
     );
     bar.style.left = `${Math.max(0, ((task.startMs - min) / range) * 100)}%`;
     bar.style.width = `${Math.max(0.8, ((task.endMs - task.startMs) / range) * 100)}%`;
-    bar.style.setProperty("--tasknotes-pm-project-hue", String(task.hue));
+    bar.style.setProperty("--tasknotes-pm-project-color", task.color);
     bar.setAttribute("aria-label", `${task.name}: ${this.dateText(task.startMs)} to ${this.dateText(task.endMs)}`);
     bar.setAttribute("data-tooltip-position", "top");
   }

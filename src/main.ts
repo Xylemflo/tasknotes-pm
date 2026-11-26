@@ -1,12 +1,13 @@
 import { Notice, Plugin, TFile, normalizePath } from "obsidian";
 import { GANTT_VIEW_TYPE, TasknotesPmGanttView } from "./gantt-view";
+import { APPROVED_PROJECT_COLORS, buildDistinctProjectPalette, nextDistinctProjectColor, normalizeProjectColor } from "./project-colors";
 import { DEFAULT_SETTINGS, TasknotesPmSettingTab, type TasknotesPmSettings } from "./settings";
 import type { GanttProject, GanttTask, MutationContext, ResolvedDependency, TaskInfo, TaskNotesApi, TaskNotesPlugin } from "./types";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const PLUGIN_SOURCE = "tasknotes-pm";
-const DISTINCT_COLOR_SCHEME_VERSION = 1;
+const DISTINCT_COLOR_SCHEME_VERSION = 2;
 
 type TaskState = {
   durationHours: number;
@@ -27,6 +28,7 @@ type RunSummary = {
   datesChanged: number;
   defaultsAdded: number;
   colorsAssigned: number;
+  colorsCleared: number;
   parentDurationsChanged: number;
   deadlineWarnings: string[];
   deadlinesMoved: number;
@@ -59,7 +61,7 @@ export default class TasknotesPmPlugin extends Plugin {
   settings: TasknotesPmSettings = DEFAULT_SETTINGS;
   private updateInProgress = false;
   private calendarSyncInProgress = false;
-  private projectColorHues = new Map<string, number>();
+  private projectColors = new Map<string, string>();
   private cardObserver: MutationObserver | null = null;
 
   async onload(): Promise<void> {
@@ -84,13 +86,15 @@ export default class TasknotesPmPlugin extends Plugin {
 
     this.installKanbanObserver();
     this.app.workspace.onLayoutReady(() => {
-      // Card colors are persisted in task frontmatter, so they should render
-      // even when the user has disabled the startup scheduling pass.
-      this.refreshProjectCardStyles();
       if (this.settings.updateOnStartup) {
         void this.updateProjectDates(true);
-      } else if (this.settings.syncGoogleCalendarOnStartup) {
-        void this.syncOpenTasksToGoogleCalendar(true, false);
+      } else {
+        // Rebuild current project membership before styling. Persisted color
+        // metadata alone is insufficient because a task can leave a project.
+        void this.hydrateProjectColorStyles();
+        if (this.settings.syncGoogleCalendarOnStartup) {
+          void this.syncOpenTasksToGoogleCalendar(true, false);
+        }
       }
     });
   }
@@ -169,7 +173,7 @@ export default class TasknotesPmPlugin extends Plugin {
 
     this.updateInProgress = true;
     const summary: RunSummary = {
-      scanned: 0, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0,
+      scanned: 0, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0, colorsCleared: 0,
       parentDurationsChanged: 0, deadlinesMoved: 0, deadlineWarnings: [],
       calendarSync: "not-run",
       invalidDurations: [], unscheduled: [], cycles: [], errors: [],
@@ -222,6 +226,7 @@ export default class TasknotesPmPlugin extends Plugin {
       summary.deadlinesMoved ? `${summary.deadlinesMoved} deadline${summary.deadlinesMoved === 1 ? "" : "s"} moved` : "",
       summary.deadlineWarnings.length ? `${summary.deadlineWarnings.length} deadline warning${summary.deadlineWarnings.length === 1 ? "" : "s"}` : "",
       summary.colorsAssigned ? `${summary.colorsAssigned} color${summary.colorsAssigned === 1 ? "" : "s"} assigned` : "",
+      summary.colorsCleared ? `${summary.colorsCleared} stale color${summary.colorsCleared === 1 ? "" : "s"} cleared` : "",
       summary.calendarSync === "synced" ? "Google Calendar synced" : "",
       summary.calendarSync === "skipped" ? "Google Calendar sync skipped" : "",
       summary.calendarSync === "unavailable" ? "Google Calendar sync unavailable" : "",
@@ -330,6 +335,35 @@ export default class TasknotesPmPlugin extends Plugin {
     for (const card of cards) this.styleProjectCard(card);
   }
 
+  private async hydrateProjectColorStyles(): Promise<void> {
+    const api = await this.getTaskNotesApi();
+    if (!api) {
+      this.projectColors.clear();
+      this.refreshProjectCardStyles();
+      return;
+    }
+
+    try {
+      await api.lifecycle.ready();
+      const tasks = await api.tasks.list();
+      const summary: RunSummary = {
+        scanned: tasks.length, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0,
+        colorsAssigned: 0, colorsCleared: 0, parentDurationsChanged: 0, deadlineWarnings: [], deadlinesMoved: 0,
+        calendarSync: "not-run", invalidDurations: [], unscheduled: [], cycles: [], errors: [],
+      };
+      const childrenByParent = await this.loadChildren(api, tasks, summary);
+      const projectPaths = [...childrenByParent.keys()];
+      const projectColors = this.settings.projectColorSchemeVersion < DISTINCT_COLOR_SCHEME_VERSION
+        ? this.rebalancedProjectColors(projectPaths)
+        : this.persistedProjectColors(projectPaths);
+      this.projectColors = this.projectGroupColors(tasks, childrenByParent, projectColors);
+    } catch (error) {
+      console.error("Tasknotes-PM project-color hydration failed", error);
+      this.projectColors.clear();
+    }
+    this.refreshProjectCardStyles();
+  }
+
   async openGanttView(): Promise<void> {
     let leaf = this.app.workspace.getLeavesOfType(GANTT_VIEW_TYPE)[0];
     if (!leaf) {
@@ -345,7 +379,7 @@ export default class TasknotesPmPlugin extends Plugin {
     await api.lifecycle.ready();
     const tasks = await api.tasks.list();
     const quietSummary: RunSummary = {
-      scanned: tasks.length, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0,
+      scanned: tasks.length, openTasks: 0, dependenciesAdded: 0, datesChanged: 0, defaultsAdded: 0, colorsAssigned: 0, colorsCleared: 0,
       parentDurationsChanged: 0, deadlineWarnings: [], deadlinesMoved: 0, calendarSync: "not-run",
       invalidDurations: [], unscheduled: [], cycles: [], errors: [],
     };
@@ -360,8 +394,8 @@ export default class TasknotesPmPlugin extends Plugin {
       const rows: GanttTask[] = [];
       this.collectGanttTasks(projectPath, projectPath, 0, states, childrenByParent, rows, new Set<string>());
       if (rows.length < 2) continue;
-      const hue = this.projectHueFor(projectPath);
-      projects.push({ path: projectPath, name: this.taskName(projectPath), hue, tasks: rows });
+      const color = this.projectColorFor(projectPath);
+      projects.push({ path: projectPath, name: this.taskName(projectPath), color, tasks: rows });
     }
     return projects.sort((left, right) => left.name.localeCompare(right.name));
   }
@@ -398,7 +432,7 @@ export default class TasknotesPmPlugin extends Plugin {
     const endMs = isProject && childSpans.length
       ? Math.max(...childSpans.map((span) => span.end))
       : state.completionMs;
-    rows.push({ path, name: this.taskName(path), startMs, endMs, hue: this.projectHueFor(path, rootProjectPath), isProject, depth });
+    rows.push({ path, name: this.taskName(path), startMs, endMs, color: this.projectColorFor(path, rootProjectPath), isProject, depth });
     const orderedChildren = [...childPaths].sort((left, right) => {
       const leftCompletion = states.get(left)?.completionMs ?? Number.POSITIVE_INFINITY;
       const rightCompletion = states.get(right)?.completionMs ?? Number.POSITIVE_INFINITY;
@@ -409,12 +443,12 @@ export default class TasknotesPmPlugin extends Plugin {
     }
   }
 
-  private projectHueFor(path: string, fallbackPath = path): number {
-    return this.projectColorHues.get(path)
-      ?? this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty])
-      ?? this.projectColorHues.get(fallbackPath)
-      ?? this.readProjectHue(this.frontmatterFor(fallbackPath)[this.settings.projectColorProperty])
-      ?? this.projectHash(fallbackPath) % 360;
+  private projectColorFor(path: string, fallbackPath = path): string {
+    return this.projectColors.get(path)
+      ?? normalizeProjectColor(this.frontmatterFor(path)[this.settings.projectColorProperty])
+      ?? this.projectColors.get(fallbackPath)
+      ?? normalizeProjectColor(this.frontmatterFor(fallbackPath)[this.settings.projectColorProperty])
+      ?? APPROVED_PROJECT_COLORS[this.projectHash(fallbackPath) % APPROVED_PROJECT_COLORS.length];
   }
 
   private taskName(path: string): string {
@@ -525,10 +559,10 @@ export default class TasknotesPmPlugin extends Plugin {
 
   /**
    * A color belongs to a project group, rather than to a particular rendered
-   * card. Saving the hue in frontmatter makes it part of the vault, so a
+   * card. Saving the exact color in frontmatter makes it part of the vault, so a
    * synced device renders the same project without relying on local settings.
    *
-   * A project card uses its own hue and each direct child uses that same hue.
+   * A project card uses its own color and each direct child uses that same color.
    * A nested project therefore starts a new, clearly identifiable group for
    * its own children while still remaining a child of its outer project.
    */
@@ -537,6 +571,55 @@ export default class TasknotesPmPlugin extends Plugin {
     childrenByParent: Map<string, Set<string>>,
     summary: RunSummary,
   ): Promise<void> {
+    const projectPaths = [...childrenByParent.keys()];
+    const projectColors = this.settings.projectColorSchemeVersion < DISTINCT_COLOR_SCHEME_VERSION
+      ? this.rebalancedProjectColors(projectPaths)
+      : this.persistedProjectColors(projectPaths);
+    const colors = this.projectGroupColors(tasks, childrenByParent, projectColors);
+    this.projectColors = colors;
+
+    for (const [path, color] of colors) {
+      const currentColor = normalizeProjectColor(this.frontmatterFor(path)[this.settings.projectColorProperty]);
+      if (currentColor === color) continue;
+      try {
+        await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          metadata[this.settings.projectColorProperty] = color;
+        });
+        summary.colorsAssigned++;
+      } catch (error) {
+        summary.errors.push(`${path}: unable to save project color (${this.errorMessage(error)})`);
+      }
+    }
+
+    // The marker is plugin-owned. Remove it as soon as a task is no longer a
+    // project or direct child; dependencies alone never confer project color.
+    for (const task of tasks) {
+      if (colors.has(task.path)) continue;
+      const currentValue = this.frontmatterFor(task.path)[this.settings.projectColorProperty];
+      if (currentValue === undefined || currentValue === null || currentValue === "") continue;
+      try {
+        await this.app.fileManager.processFrontMatter(this.fileFor(task.path), (frontmatter) => {
+          const metadata = frontmatter as Record<string, unknown>;
+          delete metadata[this.settings.projectColorProperty];
+        });
+        summary.colorsCleared++;
+      } catch (error) {
+        summary.errors.push(`${task.path}: unable to clear stale project color (${this.errorMessage(error)})`);
+      }
+    }
+
+    if (this.settings.projectColorSchemeVersion < DISTINCT_COLOR_SCHEME_VERSION) {
+      this.settings.projectColorSchemeVersion = DISTINCT_COLOR_SCHEME_VERSION;
+      await this.saveSettings();
+    }
+  }
+
+  private projectGroupColors(
+    tasks: TaskInfo[],
+    childrenByParent: Map<string, Set<string>>,
+    projectColors: Map<string, string>,
+  ): Map<string, string> {
     const parentsByChild = new Map<string, string[]>();
     for (const [parentPath, childPaths] of childrenByParent) {
       for (const childPath of childPaths) {
@@ -546,42 +629,21 @@ export default class TasknotesPmPlugin extends Plugin {
       }
     }
 
-    const projectPaths = [...childrenByParent.keys()];
-    const projectHues = this.settings.projectColorSchemeVersion < DISTINCT_COLOR_SCHEME_VERSION
-      ? this.rebalancedProjectHues(projectPaths)
-      : this.persistedProjectHues(projectPaths);
-    const hues = new Map<string, number>();
+    const colors = new Map<string, string>();
     for (const task of tasks) {
       if (childrenByParent.has(task.path)) {
-        hues.set(task.path, projectHues.get(task.path) as number);
+        const color = projectColors.get(task.path);
+        if (color !== undefined) colors.set(task.path, color);
         continue;
       }
 
       // A single card cannot display two group colors. Multiple parents are
       // unusual; selecting a stable parent keeps every synced device aligned.
       const primaryParent = parentsByChild.get(task.path)?.sort((a, b) => a.localeCompare(b))[0];
-      if (primaryParent) hues.set(task.path, projectHues.get(primaryParent) as number);
+      const color = primaryParent ? projectColors.get(primaryParent) : undefined;
+      if (color !== undefined) colors.set(task.path, color);
     }
-    this.projectColorHues = hues;
-
-    for (const [path, hue] of hues) {
-      const currentHue = this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty]);
-      if (currentHue === hue) continue;
-      try {
-        await this.app.fileManager.processFrontMatter(this.fileFor(path), (frontmatter) => {
-          const metadata = frontmatter as Record<string, unknown>;
-          metadata[this.settings.projectColorProperty] = hue;
-        });
-        summary.colorsAssigned++;
-      } catch (error) {
-        summary.errors.push(`${path}: unable to save project color (${this.errorMessage(error)})`);
-      }
-    }
-
-    if (this.settings.projectColorSchemeVersion < DISTINCT_COLOR_SCHEME_VERSION) {
-      this.settings.projectColorSchemeVersion = DISTINCT_COLOR_SCHEME_VERSION;
-      await this.saveSettings();
-    }
+    return colors;
   }
 
   private async ensureParentDependencies(api: TaskNotesApi, childrenByParent: Map<string, Set<string>>, summary: RunSummary): Promise<void> {
@@ -886,11 +948,6 @@ export default class TasknotesPmPlugin extends Plugin {
       : { value: this.settings.defaultDurationHours, invalid: true };
   }
 
-  private readProjectHue(value: unknown): number | null {
-    const hue = typeof value === "number" ? value : Number(value);
-    return Number.isInteger(hue) && hue >= 0 && hue < 360 ? hue : null;
-  }
-
   private projectHash(projectPath: string): number {
     let hash = 5381;
     for (let index = 0; index < projectPath.length; index++) {
@@ -899,74 +956,36 @@ export default class TasknotesPmPlugin extends Plugin {
     return hash;
   }
 
-  /**
-   * Give the current project set evenly-spaced hues, while interleaving the
-   * path-hash order. Consecutive paths therefore receive distant colors
-   * instead of adjacent shades such as purple and magenta.
-   */
-  private rebalancedProjectHues(projectPaths: string[]): Map<string, number> {
+  /** Apply the approved categorical palette during the one-time v2 migration. */
+  private rebalancedProjectColors(projectPaths: string[]): Map<string, string> {
     const paths = [...projectPaths].sort((left, right) => {
       const difference = this.projectHash(left) - this.projectHash(right);
       return difference || left.localeCompare(right);
     });
-    const hues = new Map<string, number>();
-    const count = paths.length;
-    if (!count) return hues;
-
-    let paletteIndex = 0;
-    const step = this.coprimePaletteStep(count);
-    for (const path of paths) {
-      hues.set(path, Math.round((paletteIndex * 360) / count) % 360);
-      paletteIndex = (paletteIndex + step) % count;
-    }
-    return hues;
+    const palette = buildDistinctProjectPalette(paths.length);
+    return new Map(paths.map((path, index) => [path, palette[index]]));
   }
 
   /** Keep already-persisted project colors stable; only allocate a new one when needed. */
-  private persistedProjectHues(projectPaths: string[]): Map<string, number> {
-    const hues = new Map<string, number>();
-    for (const path of projectPaths) {
-      const existing = this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty]);
-      if (existing !== null) hues.set(path, existing);
+  private persistedProjectColors(projectPaths: string[]): Map<string, string> {
+    const colors = new Map<string, string>();
+    const used = new Set<string>();
+    const paths = [...projectPaths].sort((left, right) => {
+      const difference = this.projectHash(left) - this.projectHash(right);
+      return difference || left.localeCompare(right);
+    });
+    for (const path of paths) {
+      const existing = normalizeProjectColor(this.frontmatterFor(path)[this.settings.projectColorProperty]);
+      if (existing === null || used.has(existing)) continue;
+      colors.set(path, existing);
+      used.add(existing);
     }
-    for (const path of projectPaths.filter((candidate) => !hues.has(candidate))) {
-      hues.set(path, this.farthestAvailableHue(path, [...hues.values()]));
+    for (const path of paths.filter((candidate) => !colors.has(candidate))) {
+      const color = nextDistinctProjectColor(used);
+      colors.set(path, color);
+      used.add(color);
     }
-    return hues;
-  }
-
-  private farthestAvailableHue(projectPath: string, usedHues: number[]): number {
-    const preferred = this.projectHash(projectPath) % 360;
-    const candidates = Array.from({ length: 18 }, (_, index) => index * 20);
-    return candidates.sort((left, right) => {
-      const rightSeparation = this.minimumHueSeparation(right, usedHues);
-      const leftSeparation = this.minimumHueSeparation(left, usedHues);
-      if (rightSeparation !== leftSeparation) return rightSeparation - leftSeparation;
-      return this.circularHueDistance(left, preferred) - this.circularHueDistance(right, preferred);
-    })[0];
-  }
-
-  private minimumHueSeparation(hue: number, otherHues: number[]): number {
-    return otherHues.length ? Math.min(...otherHues.map((other) => this.circularHueDistance(hue, other))) : 360;
-  }
-
-  private circularHueDistance(left: number, right: number): number {
-    const distance = Math.abs(left - right);
-    return Math.min(distance, 360 - distance);
-  }
-
-  private coprimePaletteStep(count: number): number {
-    for (let step = Math.max(1, Math.floor(count / 2)); step > 0; step--) {
-      if (this.greatestCommonDivisor(step, count) === 1) return step;
-    }
-    return 1;
-  }
-
-  private greatestCommonDivisor(left: number, right: number): number {
-    let a = left;
-    let b = right;
-    while (b) [a, b] = [b, a % b];
-    return a;
+    return colors;
   }
 
   private parseCompletion(value: unknown): number | null {
@@ -1020,19 +1039,16 @@ export default class TasknotesPmPlugin extends Plugin {
   private styleProjectCard(card: HTMLElement): void {
     if (!this.settings.highlightProjectCards || !this.isInsideKanban(card)) {
       card.removeClass("tasknotes-pm-project-card");
-      card.style.removeProperty("--tasknotes-pm-project-hue");
+      card.style.removeProperty("--tasknotes-pm-project-color");
       return;
     }
     const path = this.pathForCard(card);
-    const persistedHue = path
-      ? this.readProjectHue(this.frontmatterFor(path)[this.settings.projectColorProperty])
-      : null;
-    const hue = path ? this.projectColorHues.get(path) ?? persistedHue ?? undefined : undefined;
-    card.toggleClass("tasknotes-pm-project-card", hue !== undefined);
-    if (hue === undefined) {
-      card.style.removeProperty("--tasknotes-pm-project-hue");
+    const color = path ? this.projectColors.get(path) : undefined;
+    card.toggleClass("tasknotes-pm-project-card", color !== undefined);
+    if (color === undefined) {
+      card.style.removeProperty("--tasknotes-pm-project-color");
     } else {
-      card.style.setProperty("--tasknotes-pm-project-hue", String(hue));
+      card.style.setProperty("--tasknotes-pm-project-color", color);
     }
   }
 

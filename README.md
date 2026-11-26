@@ -25,7 +25,7 @@ Tasknotes-PM works entirely within the active vault. It does not make network re
 - A normal finish-to-start successor is scheduled after the latest predecessor due date, plus a 24-hour gap and the successor duration.
 - Ordinary dependency calculations remain extend-only. Parent rollups and hard-deadline assignments are exact and may move dates earlier when required.
 - Exact calculated times are retained in `tasknotesPmCompletion`; TaskNotes receives a date-only `due` value for normal display.
-- Project cards and their children retain their persisted project colors in TaskNotes Kanban and Tasknotes-PM Gantt views.
+- Project cards and their children retain their persisted exact hex colors in TaskNotes Kanban and Tasknotes-PM Gantt views. The first ten colors use the approved categorical palette; later colors maximize perceptual distance from all colors already in use.
 
 The plugin intentionally does not remove a dependency when a task stops being a subtask. This prevents it from deleting a relationship that a user may have created independently.
 

@@ -1,6 +1,6 @@
 # Tasknotes-PM — Requirements
 
-**Status:** Implemented through version 0.2.1  
+**Status:** Implemented through version 0.2.2  
 **Updated:** 2026-11-26  
 **Target:** An Obsidian community plugin that complements TaskNotes 4.14+  
 **Working name / plugin ID:** `tasknotes-pm`
@@ -119,11 +119,16 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
 
 ### 4.5 Kanban treatment
 
-1. In TaskNotes Kanban views, a project and its direct children use the project's persisted color.
-2. A nested project uses its own persisted color for itself and its direct children.
-3. The styling must preserve readable foreground text, status controls, icons, keyboard focus, hover state, and the user’s light/dark theme contrast.
-4. Apply the style without changing a task’s status, tags, priority, or any TaskNotes data unrelated to this feature.
-5. The implementation may use a plugin-owned CSS class and a small, documented marker property only if TaskNotes’ Bases/Kanban renderer cannot reliably expose the project state. The marker must be maintained by the updater and be opt-out/configurable.
+1. In TaskNotes Kanban views, only a current project and its current direct children use the project's persisted color.
+2. A dependency relationship alone, including `blockedBy` or `blocking`, never assigns project color.
+3. When a task leaves a project and has no other current parent, remove the plugin-owned project-color marker and its Kanban color.
+4. A nested project uses its own persisted color for itself and its direct children.
+5. Every active project color must be perceptually distinct from every other active project color. Assignment must maximize the minimum perceptual distance from all colors already in use, rather than relying only on a path hash or evenly spaced HSL hues.
+6. The approved first-ten palette, in assignment order, is `#AF1C0D`, `#00B8A9`, `#FFCA3A`, `#7B61FF`, `#2DC653`, `#FF7A00`, `#1982C4`, `#F15BB5`, `#96AFC9`, and `#A65F38`.
+7. Persist the exact hex color so the same project remains stable across restarts and synced devices. Rebalance existing colors only during an explicit color-scheme migration.
+8. The styling must preserve readable foreground text, status controls, icons, keyboard focus, hover state, and the user’s light/dark theme contrast.
+9. Apply the style without changing a task’s status, tags, priority, or any TaskNotes data unrelated to this feature.
+10. The implementation may use a plugin-owned CSS class and a small, documented marker property only if TaskNotes’ Bases/Kanban renderer cannot reliably expose the project state. The marker must be maintained by the updater and be opt-out/configurable.
 
 ### 4.6 Gantt timeline
 
@@ -131,7 +136,7 @@ The calculations use **finish-to-start** scheduling. A due date is the task’s 
 2. Allow the view to display either one selected project or all open projects.
 3. Show nested project tasks recursively with parent/child indentation.
 4. Derive each bar's start from `completion − duration` and render parent bars across their calculated child span.
-5. Use the persisted project hue for every project and task bar.
+5. Use the persisted exact project color for every project and task bar.
 6. Render weekly tick marks in the timeline header, aligned with the weekly chart grid.
 7. Make every task name and timeline bar a link to that task's TaskNote.
 
@@ -169,12 +174,12 @@ Changing defaults affects subsequent calculations; it does not rewrite every tas
 4. A task without a `duration` receives the default scheduling value of 24 hours without overwriting a valid explicit value.
 5. The command produces the same result as the start-up update and is safe to run repeatedly.
 6. Existing unrelated TaskNotes dependencies survive an update unchanged.
-7. Project and child cards retain their persisted project hues in Kanban views.
+7. Project and child cards retain their persisted project colors in Kanban views.
 8. Cycles and unresolved links do not cause partial corrupt dependency rewrites or a loop.
 9. A parent's duration equals the complete span of its dated children and its due date equals the latest child due date plus one day.
 10. A hard-deadline parent retains that deadline as its due date and its children are back-scheduled without changing already compliant dates.
 11. A hard-deadline schedule that starts before today warns and follows the selected conflict policy.
-12. The Gantt view can switch between a single project and all open projects, includes nested children, renders weekly header ticks, retains persisted project hues, and opens the correct TaskNote from either its name or timeline bar.
+12. The Gantt view can switch between a single project and all open projects, includes nested children, renders weekly header ticks, retains persisted project colors, and opens the correct TaskNote from either its name or timeline bar.
 
 ## 8. Resolved design decisions and current constraints
 
@@ -200,7 +205,7 @@ Tasknotes-PM schedules only `FINISHTOSTART` and treats a missing type as `FINISH
 
 ### F. Kanban implementation risk
 
-TaskNotes Kanban cards are styled with plugin-owned CSS classes and persisted hue metadata. Card matching still depends on TaskNotes' rendered card attributes and metadata.
+TaskNotes Kanban cards are styled with plugin-owned CSS classes and persisted exact-color metadata. Card matching still depends on TaskNotes' rendered card attributes and metadata.
 
 ### G. Start-up writes and vault synchronization
 
@@ -217,4 +222,4 @@ The requested automatic start-up run can change many task files immediately afte
 
 ## 10. Implementation readiness
 
-Version 0.2.1 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. It also restores persisted project colors to Kanban cards after Obsidian starts, including when startup scheduling is disabled.
+Version 0.2.2 implements the scheduling, hard-deadline, project-color, and Gantt requirements as a standalone TypeScript Obsidian plugin with TaskNotes as a required peer plugin. It migrates project identities to the approved exact-color palette, maximizes perceptual separation for additional colors, removes stale markers from tasks that leave projects, and keeps Kanban and Gantt colors aligned.

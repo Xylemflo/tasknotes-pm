@@ -50,7 +50,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
     this.addTextSetting(containerEl, "Duration property", "Frontmatter property measured in hours.", "durationProperty");
     this.addTextSetting(containerEl, "Completion timestamp property", "Plugin-owned ISO timestamp used to retain hour-level precision.", "completionProperty");
     this.addTextSetting(containerEl, "Hard deadline property", "A date in this frontmatter property schedules children backward from the parent deadline.", "hardDeadlineProperty");
-    this.addTextSetting(containerEl, "Project color property", "A persisted HSL hue (0–359) shared by each project and its direct children.", "projectColorProperty");
+    this.addTextSetting(containerEl, "Project color property", "A persisted hex color shared by each project and its direct children.", "projectColorProperty");
     this.addNumberSetting(containerEl, "Default duration", "Hours used when no valid duration exists.", "defaultDurationHours");
     this.addNumberSetting(containerEl, "Dependency gap", "Hours between a predecessor finishing and a successor starting.", "dependencyGapHours");
 

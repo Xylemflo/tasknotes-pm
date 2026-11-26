@@ -19,7 +19,7 @@ export type GanttTask = {
   name: string;
   startMs: number;
   endMs: number;
-  hue: number;
+  color: string;
   isProject: boolean;
   depth: number;
 };
@@ -27,7 +27,7 @@ export type GanttTask = {
 export type GanttProject = {
   path: string;
   name: string;
-  hue: number;
+  color: string;
   tasks: GanttTask[];
 };
 
