@@ -102,7 +102,6 @@ export default class TasknotesPmPlugin extends Plugin {
 
   onunload(): void {
     this.cardObserver?.disconnect();
-    this.app.workspace.detachLeavesOfType(GANTT_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {

@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import type { SettingDefinitionItem } from "obsidian";
 import type TasknotesPmPlugin from "./main";
 
 export interface TasknotesPmSettings {
@@ -100,6 +101,75 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
       }));
   }
 
+  /**
+   * Makes these settings searchable in Obsidian 1.13 and later. The
+   * imperative display() implementation above remains as the compatibility
+   * fallback for Obsidian 1.12.
+   */
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [{
+      type: "group",
+      heading: "Project scheduling",
+      items: [
+        this.textDefinition("durationProperty", "Duration property", "Frontmatter property measured in hours."),
+        this.textDefinition("completionProperty", "Completion timestamp property", "Plugin-owned ISO timestamp used to retain hour-level precision."),
+        this.textDefinition("hardDeadlineProperty", "Hard deadline property", "A date in this frontmatter property schedules children backward from the parent deadline."),
+        this.textDefinition("projectColorProperty", "Project color property", "A persisted hex color shared by each project and its direct children."),
+        this.numberDefinition("defaultDurationHours", "Default duration", "Hours used when no valid duration exists."),
+        this.numberDefinition("dependencyGapHours", "Dependency gap", "Hours between a predecessor finishing and a successor starting."),
+        {
+          name: "Hard deadline conflict",
+          desc: "Choose what happens when backward scheduling would begin before today.",
+          control: {
+            type: "dropdown",
+            key: "hardDeadlineConflictPolicy",
+            options: {
+              ignore: "Honor deadline and create overdue tasks",
+              "move-deadline": "Move parent due date and deadline",
+            },
+          },
+        },
+        {
+          name: "Update project dates on startup",
+          desc: "Run the same project rollup and deadline update after TaskNotes is ready.",
+          control: { type: "toggle", key: "updateOnStartup" },
+        },
+        {
+          name: "Sync Google Calendar on startup",
+          desc: "After TaskNotes is ready, run its built-in Sync all tasks action. TaskNotes decides which dated, open tasks are eligible for export.",
+          control: { type: "toggle", key: "syncGoogleCalendarOnStartup" },
+        },
+        {
+          name: "Sync Google Calendar after project updates",
+          desc: "After the Update Project Dates command finishes, run TaskNotes' built-in Sync all tasks action.",
+          control: { type: "toggle", key: "syncGoogleCalendarOnUpdate" },
+        },
+        {
+          name: "Highlight project cards",
+          desc: "Use each project's persisted, high-contrast color for the project and its direct child cards in TaskNotes Kanban views.",
+          control: { type: "toggle", key: "highlightProjectCards" },
+        },
+      ],
+    }];
+  }
+
+  getControlValue(key: string): unknown {
+    return this.plugin.settings[key as keyof TasknotesPmSettings];
+  }
+
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    if (!this.isEditableSettingKey(key)) return;
+    const current = this.plugin.settings[key];
+    if (typeof current === "string" && typeof value !== "string") return;
+    if (typeof current === "number" && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) return;
+    if (typeof current === "boolean" && typeof value !== "boolean") return;
+    const normalized = typeof value === "string" ? value.trim() : value;
+    if (typeof normalized === "string" && !normalized) return;
+    (this.plugin.settings as unknown as Record<string, string | number | boolean>)[key] = normalized;
+    await this.plugin.saveSettings();
+    if (key === "highlightProjectCards") this.plugin.refreshProjectCardStyles();
+  }
+
   private addTextSetting(containerEl: HTMLElement, name: string, desc: string, key: "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty"): void {
     new Setting(containerEl).setName(name).setDesc(desc).addText((text) => text
       .setValue(this.plugin.settings[key])
@@ -121,5 +191,35 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
         this.plugin.settings[key] = parsed;
         await this.plugin.saveSettings();
       }));
+  }
+
+  private textDefinition(key: "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty", name: string, desc: string): SettingDefinitionItem {
+    return {
+      name,
+      desc,
+      control: {
+        type: "text",
+        key,
+        validate: (value) => value.trim() ? undefined : "A property name is required.",
+      },
+    };
+  }
+
+  private numberDefinition(key: "defaultDurationHours" | "dependencyGapHours", name: string, desc: string): SettingDefinitionItem {
+    return {
+      name,
+      desc,
+      control: {
+        type: "number",
+        key,
+        min: 0.000001,
+        step: "any",
+        placeholder: "24",
+      },
+    };
+  }
+
+  private isEditableSettingKey(key: string): key is "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty" | "defaultDurationHours" | "dependencyGapHours" | "hardDeadlineConflictPolicy" | "updateOnStartup" | "syncGoogleCalendarOnStartup" | "syncGoogleCalendarOnUpdate" | "highlightProjectCards" {
+    return key !== "projectColorSchemeVersion" && key in this.plugin.settings;
   }
 }
