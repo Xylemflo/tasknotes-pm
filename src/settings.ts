@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type { SettingDefinitionItem } from "obsidian";
+import type { SettingDefinition, SettingDefinitionItem } from "obsidian";
 import type TasknotesPmPlugin from "./main";
 
 export interface TasknotesPmSettings {
@@ -163,7 +163,8 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
     if (typeof current === "string" && typeof value !== "string") return;
     if (typeof current === "number" && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) return;
     if (typeof current === "boolean" && typeof value !== "boolean") return;
-    const normalized = typeof value === "string" ? value.trim() : value;
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return;
+    const normalized: string | number | boolean = typeof value === "string" ? value.trim() : value;
     if (typeof normalized === "string" && !normalized) return;
     (this.plugin.settings as unknown as Record<string, string | number | boolean>)[key] = normalized;
     await this.plugin.saveSettings();
@@ -193,7 +194,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
       }));
   }
 
-  private textDefinition(key: "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty", name: string, desc: string): SettingDefinitionItem {
+  private textDefinition(key: "durationProperty" | "completionProperty" | "hardDeadlineProperty" | "projectColorProperty", name: string, desc: string): SettingDefinition {
     return {
       name,
       desc,
@@ -205,7 +206,7 @@ export class TasknotesPmSettingTab extends PluginSettingTab {
     };
   }
 
-  private numberDefinition(key: "defaultDurationHours" | "dependencyGapHours", name: string, desc: string): SettingDefinitionItem {
+  private numberDefinition(key: "defaultDurationHours" | "dependencyGapHours", name: string, desc: string): SettingDefinition {
     return {
       name,
       desc,
